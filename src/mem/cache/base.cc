@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, 2018-2019 ARM Limited
+ * Copyright (c) 2012-2013, 2018-2019, 2023-2024 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -58,10 +58,14 @@
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/queue_entry.hh"
 #include "mem/cache/tags/compressed_tags.hh"
+//#include "mem/cache/tags/partitioning_policies/partition_manager.hh"
 #include "mem/cache/tags/super_blk.hh"
 #include "params/BaseCache.hh"
 #include "params/WriteAllocator.hh"
 #include "sim/cur_tick.hh"
+
+#include "debug/AdaptiveDdioOtf.hh"
+#include "debug/AdaptiveDdioCache.hh"
 
 namespace gem5
 {
@@ -79,12 +83,15 @@ BaseCache::CacheResponsePort::CacheResponsePort(const std::string &_name,
 
 BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
     : ClockedObject(p),
+      mlc_idx(p.mlc_idx), isMLC(p.is_mlc), isIOCache(p.is_iocache), send_header_only(p.send_header_only),
       cpuSidePort (p.name + ".cpu_side_port", *this, "CpuSidePort"),
       memSidePort(p.name + ".mem_side_port", this, "MemSidePort"),
+      //accessor(*this),
       mshrQueue("MSHRs", p.mshrs, 0, p.demand_mshr_reserve, p.name),
       writeBuffer("write buffer", p.write_buffers, p.mshrs, p.name),
       tags(p.tags),
       compressor(p.compressor),
+      //partitionManager(p.partitioning_manager),
       prefetcher(p.prefetcher),
       writeAllocator(p.write_allocator),
       writebackClean(p.writeback_clean),
@@ -111,7 +118,10 @@ BaseCache::BaseCache(const BaseCacheParams &p, unsigned blk_size)
       missCount(p.max_miss_count),
       addrRanges(p.addr_ranges.begin(), p.addr_ranges.end()),
       system(p.system),
-      stats(*this)
+      stats(*this),
+      ddioEnabled(p.ddio_enabled), ddioDisabled(p.ddio_disabled),
+      ddioWayPart(p.ddio_way_part),
+      isLLC(p.is_llc), mlc_ddio(p.mlc_ddio)
 {
     // the MSHR queue has no reserve entries as we check the MSHR
     // queue on every single allocation, whereas the write queue has
@@ -428,7 +438,7 @@ BaseCache::recvTimingReq(PacketPtr pkt)
         PacketList writebacks;
         // Note that lat is passed by reference here. The function
         // access() will set the lat value.
-        satisfied = access(pkt, blk, lat, writebacks);
+        satisfied = access(pkt, blk, lat, writebacks, pkt->isBlockIO() && ddioEnabled);
 
         // After the evicted blocks are selected, they must be forwarded
         // to the write buffer to ensure they logically precede anything
@@ -445,6 +455,9 @@ BaseCache::recvTimingReq(PacketPtr pkt)
     // Here we reset the timing of the packet.
     pkt->headerDelay = pkt->payloadDelay = 0;
 
+    if (isMLC && pkt->isPrefetchHintPkt()) {
+        ppDdioHint->notify(pkt);
+    }
     if (satisfied) {
         // notify before anything else as later handleTimingReqHit might turn
         // the packet in a response
@@ -457,9 +470,21 @@ BaseCache::recvTimingReq(PacketPtr pkt)
         }
 
         handleTimingReqHit(pkt, blk, request_time);
+        if (isIOCache) {
+            if (pkt->cmd == MemCmd::WriteReq || pkt->cmd == MemCmd::WriteLineReq) {
+                // Not Works
+                blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+
+                if (pkt->isDdioHeader())
+                    blk->setDdioHeader();
+
+                DPRINTF(AdaptiveDdioCache, "recvTimingReq qid %d, pkt %s\n", pkt->getDdioPrefetchDestination(), pkt->print());
+            }
+        }
     } else {
         handleTimingReqMiss(pkt, blk, forward_time, request_time);
 
+        //ppMiss->notify(CacheAccessProbeArg(pkt,accessor));
         ppMiss->notify(pkt);
     }
 
@@ -548,6 +573,25 @@ BaseCache::recvTimingResp(PacketPtr pkt)
     assert(!mshr->wasWholeLineWrite || pkt->isInvalidate());
 
     CacheBlk *blk = tags->findBlock(pkt->getAddr(), pkt->isSecure());
+    if (isIOCache) {
+        if (blk) {
+            blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            if (pkt->isDdioHeader())
+                blk->setDdioHeader();
+
+            // Not works
+            if (pkt->getDdioPrefetchDestination() != -1) {
+                blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            }
+            DPRINTF(AdaptiveDdioOtf, "recvTimingResp qid %d, pkt %s\n", blk->getDdioPrefetchDestination(), pkt->print());
+
+            if (blk->getDdioPrefetchDestination() != -1) {
+                DPRINTF(AdaptiveDdioCache, "Set MLC id %d, blk %s, pkt %s\n", blk->getDdioPrefetchDestination(), blk->print(), pkt->print());
+            }
+        } else {
+            // DPRINTF(DDIO, "blk is nullptr\n");
+        }
+    }
 
     if (is_fill && !is_error) {
         DPRINTF(Cache, "Block for addr %#llx being updated in Cache\n",
@@ -555,8 +599,18 @@ BaseCache::recvTimingResp(PacketPtr pkt)
 
         const bool allocate = (writeAllocator && mshr->wasWholeLineWrite) ?
             writeAllocator->allocate() : mshr->allocOnFill();
-        blk = handleFill(pkt, blk, writebacks, allocate);
+        if (pkt->getDdioPrefetchDestination() == -1) {
+            pkt->setDdioPrefetchDestination(mshr->qid_from_dev);
+            if (mshr->is_ddio_pkt)
+                pkt->setDdioPkt();
+            if (mshr->is_header)
+                pkt->setDdioHeader();
+        }
+
+        blk = handleFill(pkt, blk, writebacks, allocate,
+                         mshr->wasBlockIO && ddioEnabled);
         assert(blk != nullptr);
+        //ppFill->notify(CacheAccessProbeArg(pkt, accessor));
         ppFill->notify(pkt);
     }
 
@@ -771,6 +825,9 @@ void
 BaseCache::updateBlockData(CacheBlk *blk, const PacketPtr cpkt,
     bool has_old_data)
 {
+    //CacheDataUpdateProbeArg data_update(
+    //    regenerateBlkAddr(blk), blk->isSecure(),
+    //    blk->getSrcRequestorId(), accessor);
     DataUpdate data_update(regenerateBlkAddr(blk), blk->isSecure());
     if (ppDataUpdate->hasListeners()) {
         if (has_old_data) {
@@ -788,6 +845,7 @@ BaseCache::updateBlockData(CacheBlk *blk, const PacketPtr cpkt,
         if (cpkt) {
             data_update.newData = std::vector<uint64_t>(blk->data,
                 blk->data + (blkSize / sizeof(uint64_t)));
+            //data_update.hwPrefetched = blk->wasPrefetched();
         }
         ppDataUpdate->notify(data_update);
     }
@@ -809,6 +867,9 @@ BaseCache::cmpAndSwap(CacheBlk *blk, PacketPtr pkt)
     assert(sizeof(uint64_t) >= pkt->getSize());
 
     // Get a copy of the old block's contents for the probe before the update
+    //CacheDataUpdateProbeArg data_update(
+    //    regenerateBlkAddr(blk), blk->isSecure(), blk->getSrcRequestorId(),
+    //    accessor);
     DataUpdate data_update(regenerateBlkAddr(blk), blk->isSecure());
     if (ppDataUpdate->hasListeners()) {
         data_update.oldData = std::vector<uint64_t>(blk->data,
@@ -1023,8 +1084,10 @@ BaseCache::updateCompressionData(CacheBlk *&blk, const uint64_t* data,
         bool victim_itself = false;
         CacheBlk *victim = nullptr;
         if (replaceExpansions || is_data_contraction) {
-            victim = tags->findVictim(regenerateBlkAddr(blk),
-                blk->isSecure(), compression_size, evict_blks);
+            victim = tags->findVictim(
+                regenerateBlkAddr(blk), blk->isSecure(),
+                compression_size, evict_blks);
+                //blk->getPartitionId());
 
             // It is valid to return nullptr if there is no victim
             if (!victim) {
@@ -1106,6 +1169,9 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         if (pkt->isAtomicOp()) {
             // Get a copy of the old block's contents for the probe before
             // the update
+            //CacheDataUpdateProbeArg data_update(
+            //    regenerateBlkAddr(blk), blk->isSecure(),
+            //    blk->getSrcRequestorId(), accessor);
             DataUpdate data_update(regenerateBlkAddr(blk), blk->isSecure());
             if (ppDataUpdate->hasListeners()) {
                 data_update.oldData = std::vector<uint64_t>(blk->data,
@@ -1125,6 +1191,7 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
             if (ppDataUpdate->hasListeners()) {
                 data_update.newData = std::vector<uint64_t>(blk->data,
                     blk->data + (blkSize / sizeof(uint64_t)));
+                //data_update.hwPrefetched = blk->wasPrefetched();
                 ppDataUpdate->notify(data_update);
             }
 
@@ -1172,7 +1239,7 @@ BaseCache::satisfyRequest(PacketPtr pkt, CacheBlk *blk, bool, bool)
         blk->clearCoherenceBits(CacheBlk::DirtyBit);
     } else {
         assert(pkt->isInvalidate());
-        invalidateBlock(blk);
+        invalidateBlock(blk, isLLCisMLCIOInvalid(pkt));
         DPRINTF(CacheVerbose, "%s for %s (invalidation)\n", __func__,
                 pkt->print());
     }
@@ -1228,7 +1295,7 @@ BaseCache::calculateAccessLatency(const CacheBlk* blk, const uint32_t delay,
 
 bool
 BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
-                  PacketList &writebacks)
+                  PacketList &writebacks, bool is_ddio)
 {
     // sanity check
     assert(pkt->isRequest());
@@ -1275,6 +1342,16 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
             PacketPtr wbPkt = wb_entry->getTarget()->pkt;
             assert(wbPkt->isWriteback());
 
+            if (isIOCache) {
+                if (pkt->cmd == MemCmd::WriteReq || pkt->cmd == MemCmd::WriteLineReq) {
+                    wbPkt->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+                    if (pkt->isDdioPkt())
+                        wbPkt->setDdioPkt();
+                    if (pkt->isDdioHeader())
+                        wbPkt->setDdioHeader();
+                    // DPRINTF(AdaptiveDdioOtf, "wb_entry. pkt adq %d, pkt %s\n", pkt->getAdqQ(), pkt->print());
+                }
+            }
             if (pkt->isCleanEviction()) {
                 // The CleanEvict and WritebackClean snoops into other
                 // peer caches of the same level while traversing the
@@ -1376,6 +1453,12 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         blk->setWhenReady(clockEdge(fillLatency) + pkt->headerDelay +
             std::max(cyclesToTicks(tag_latency), (uint64_t)pkt->payloadDelay));
 
+        if (isIOCache) {
+            if (pkt->getDdioPrefetchDestination() != -1) {
+                // Not Works
+                blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            }
+        }
         return true;
     } else if (pkt->cmd == MemCmd::CleanEvict) {
         // A CleanEvict does not need to access the data array
@@ -1408,7 +1491,7 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
                 return false;
             } else {
                 // a writeback that misses needs to allocate a new block
-                blk = allocateBlock(pkt, writebacks);
+                blk = allocateBlock(pkt, writebacks, is_ddio);
                 if (!blk) {
                     // no replaceable block available: give up, fwd to
                     // next level.
@@ -1452,6 +1535,16 @@ BaseCache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         blk->setWhenReady(clockEdge(fillLatency) + pkt->headerDelay +
             std::max(cyclesToTicks(tag_latency), (uint64_t)pkt->payloadDelay));
 
+        if (isIOCache) {
+            if (pkt->getDdioPrefetchDestination() != -1) {
+                blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+                if (pkt->isDdioPkt())
+                    blk->setDdioPkt();
+                if (pkt->isDdioHeader())
+                    blk->setDdioHeader();
+                // DPRINTF(AdaptiveDdioOtf, "Alloc blk WriteClean. pkt adq %d, pkt %s\n", pkt->getAdqQ(), pkt->print());
+            }
+        }
         // If this a write-through packet it will be sent to cache below
         return !pkt->writeThrough();
     } else if (blk && (pkt->needsWritable() ?
@@ -1509,7 +1602,7 @@ BaseCache::maintainClusivity(bool from_cache, CacheBlk *blk)
 
 CacheBlk*
 BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
-                      bool allocate)
+                      bool allocate, bool is_ddio)
 {
     assert(pkt->isResponse());
     Addr addr = pkt->getAddr();
@@ -1527,7 +1620,7 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
 
         // need to do a replacement if allocating, otherwise we stick
         // with the temporary storage
-        blk = allocate ? allocateBlock(pkt, writebacks) : nullptr;
+        blk = allocate ? allocateBlock(pkt, writebacks, is_ddio) : nullptr;
 
         if (!blk) {
             // No replaceable block or a mostly exclusive
@@ -1599,12 +1692,23 @@ BaseCache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     // The block will be ready when the payload arrives and the fill is done
     blk->setWhenReady(clockEdge(fillLatency) + pkt->headerDelay +
                       pkt->payloadDelay);
+    if (isIOCache) {
+        if (pkt->getDdioPrefetchDestination() != -1) {
+            blk->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            if (pkt->isDdioHeader())
+                blk->setDdioHeader();
+
+            if (pkt->isDdioPkt()) {
+                blk->setDdioPkt();
+            }
+        }
+    }
 
     return blk;
 }
 
 CacheBlk*
-BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
+BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks, bool is_ddio)
 {
     // Get address
     const Addr addr = pkt->getAddr();
@@ -1630,10 +1734,18 @@ BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
         blk_size_bits = comp_data->getSizeBits();
     }
 
+    // get partitionId from Packet
+    //const auto partition_id = partitionManager ?
+    //    partitionManager->readPacketPartitionID(pkt) : 0;
     // Find replacement victim
     std::vector<CacheBlk*> evict_blks;
-    CacheBlk *victim = tags->findVictim(addr, is_secure, blk_size_bits,
-                                        evict_blks);
+    CacheBlk *victim;
+
+    if (is_ddio) {
+        victim = tags->findVictimWayPart(addr, is_secure, evict_blks, ddioWayPart);
+    } else {
+        victim = tags->findVictim(addr, is_secure, blk_size_bits, evict_blks);
+    }
 
     // It is valid to return nullptr if there is no victim
     if (!victim)
@@ -1657,11 +1769,12 @@ BaseCache::allocateBlock(const PacketPtr pkt, PacketList &writebacks)
         compressor->setDecompressionLatency(victim, decompression_lat);
     }
 
+    victim->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
     return victim;
 }
 
 void
-BaseCache::invalidateBlock(CacheBlk *blk)
+BaseCache::invalidateBlock(CacheBlk *blk, bool is_llc_inv)
 {
     // If block is still marked as prefetched, then it hasn't been used
     if (blk->wasPrefetched()) {
@@ -1674,7 +1787,10 @@ BaseCache::invalidateBlock(CacheBlk *blk)
     // If handling a block present in the Tags, let it do its invalidation
     // process, which will update stats and invalidate the block itself
     if (blk != tempBlock) {
-        tags->invalidate(blk);
+        if (is_llc_inv)
+            tags->invalidateDDIO(blk);
+        else
+            tags->invalidate(blk);
     } else {
         tempBlock->invalidate();
     }
@@ -1710,7 +1826,20 @@ BaseCache::writebackBlk(CacheBlk *blk)
     PacketPtr pkt =
         new Packet(req, blk->isSet(CacheBlk::DirtyBit) ?
                    MemCmd::WritebackDirty : MemCmd::WritebackClean);
+    if (isIOCache) {
+        // SHIN. Adpative-DDIO ADQ
+        pkt->setDdioPrefetchDestination(blk->getDdioPrefetchDestination());
+        pkt->setBlockIO();
 
+        if (blk->isDdioPkt())
+            pkt->setDdioPkt();
+        if (blk->isDdioHeader())
+            pkt->setDdioHeader();
+
+        // DPRINTF(AdaptiveDdioOtf, "writebackBlk, qid %d, pkt %s\n", blk->getAdqQ(), pkt->print());
+
+        blk->setDdioPrefetchDestination(-1);
+    }
     DPRINTF(Cache, "Create Writeback %s writable: %d, dirty: %d\n",
         pkt->print(), blk->isSet(CacheBlk::WritableBit),
         blk->isSet(CacheBlk::DirtyBit));
@@ -1730,6 +1859,8 @@ BaseCache::writebackBlk(CacheBlk *blk)
     pkt->allocate();
     pkt->setDataFromBlock(blk->data, blkSize);
 
+    if (isIOCache)
+        pkt->setBlockIO();
     // When a block is compressed, it must first be decompressed before being
     // sent for writeback.
     if (compressor) {
@@ -1775,6 +1906,8 @@ BaseCache::writecleanBlk(CacheBlk *blk, Request::Flags dest, PacketId id)
     pkt->allocate();
     pkt->setDataFromBlock(blk->data, blkSize);
 
+    if (isIOCache)
+        pkt->setBlockIO();
     // When a block is compressed, it must first be decompressed before being
     // sent for writeback.
     if (compressor) {
@@ -1825,6 +1958,8 @@ BaseCache::writebackVisitor(CacheBlk &blk)
         }
 
         Packet packet(request, MemCmd::WriteReq);
+        if (isIOCache)
+            packet.setBlockIO();
         packet.dataStatic(blk.data);
 
         memSidePort.sendFunctional(&packet);
@@ -2507,11 +2642,17 @@ BaseCache::CacheStats::regStats()
 void
 BaseCache::regProbePoints()
 {
-    ppHit = new ProbePointArg<PacketPtr>(this->getProbeManager(), "Hit");
-    ppMiss = new ProbePointArg<PacketPtr>(this->getProbeManager(), "Miss");
-    ppFill = new ProbePointArg<PacketPtr>(this->getProbeManager(), "Fill");
+    ppHit = new ProbePointArg<PacketPtr>(
+        this->getProbeManager(), "Hit");
+    ppMiss = new ProbePointArg<PacketPtr>(
+        this->getProbeManager(), "Miss");
+    ppFill = new ProbePointArg<PacketPtr>(
+        this->getProbeManager(), "Fill");
+    ppDdioHint = new ProbePointArg<PacketPtr>(
+        this->getProbeManager(), "DdioHint");
     ppDataUpdate =
-        new ProbePointArg<DataUpdate>(this->getProbeManager(), "Data Update");
+        new ProbePointArg<DataUpdate>(
+            this->getProbeManager(), "Data Update");
 }
 
 ///////////////

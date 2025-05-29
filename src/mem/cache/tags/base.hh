@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014,2016-2019 ARM Limited
+ * Copyright (c) 2012-2014, 2016-2019, 2023-2024 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -56,6 +56,7 @@
 #include "base/statistics.hh"
 #include "base/types.hh"
 #include "mem/cache/cache_blk.hh"
+//#include "mem/cache/tags/indexing_policies/base.hh"
 #include "mem/packet.hh"
 #include "params/BaseTags.hh"
 #include "sim/clocked_object.hh"
@@ -86,7 +87,11 @@ class BaseTags : public ClockedObject
     System *system;
 
     /** Indexing policy */
+    //TaggedIndexingPolicy *indexingPolicy;
     BaseIndexingPolicy *indexingPolicy;
+
+    /** Partitioning manager */
+    //partitioning_policy::PartitionManager *partitionManager;
 
     /**
      * The number of tags that need to be touched to meet the warmup
@@ -262,6 +267,10 @@ class BaseTags : public ClockedObject
 
         blk->invalidate();
     }
+    virtual void invalidateDDIO(CacheBlk *blk)
+    {
+        panic("this should be implement in the tag policy that you want to use\n");
+    }
 
     /**
      * Find replacement victim based on address. If the address requires
@@ -278,10 +287,16 @@ class BaseTags : public ClockedObject
      * @param evict_blks Cache blocks to be evicted.
      * @return Cache block to be replaced.
      */
-    virtual CacheBlk* findVictim(Addr addr, const bool is_secure,
-                                 const std::size_t size,
-                                 std::vector<CacheBlk*>& evict_blks) = 0;
+    virtual CacheBlk *findVictim(Addr addr, const bool is_secure,
+        const std::size_t size,
+        std::vector<CacheBlk *> &evict_blks) = 0;
 
+    virtual CacheBlk *findVictimWayPart(Addr addr, const bool is_secure,
+                                        std::vector<CacheBlk *> &evict_blks,
+                                        int32_t way_part = -1) const
+    {
+        panic("you should only use way partitioning with LRU tags");
+    }
     /**
      * Access block and update replacement data. May not succeed, in which case
      * nullptr is returned. This has all the implications of a cache access and

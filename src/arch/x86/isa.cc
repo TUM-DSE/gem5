@@ -34,10 +34,13 @@
 #include "arch/x86/regs/float.hh"
 #include "arch/x86/regs/int.hh"
 #include "arch/x86/regs/misc.hh"
+#include "arch/x86/regs/msr.hh"
+
 #include "base/compiler.hh"
 #include "cpu/base.hh"
 #include "cpu/thread_context.hh"
 #include "debug/MatRegs.hh"
+//#include "debug/X86.hh"
 #include "params/X86ISA.hh"
 #include "sim/serialize.hh"
 
@@ -124,6 +127,10 @@ ISA::clear()
 
     regVal[misc_reg::Pat] = 0x0007040600070406ULL;
 
+    // Bit 11 is mttr enable (1), bit 10 is fixed range enable (1)
+    // bits 0-7 is default type (6, which means WB)
+    //regVal[misc_reg::DefType] = 0xC06;
+
     regVal[misc_reg::Syscfg] = 0x20601;
 
     regVal[misc_reg::TopMem] = 0x4000000;
@@ -151,10 +158,23 @@ RegClass matRegClass(MatRegClass, MatRegClassName, 1, debug::MatRegs);
 
 } // anonymous namespace
 
-ISA::ISA(const X86ISAParams &p) : BaseISA(p), vendorString(p.vendor_string)
+ISA::ISA(const X86ISAParams &p)
+    : BaseISA(p), vendorString(p.vendor_string)
 {
     fatal_if(vendorString.size() != 12,
              "CPUID vendor string must be 12 characters\n");
+
+    //cpuid->addStandardFunc(FamilyModelStepping, p.FamilyModelStepping);
+    //cpuid->addStandardFunc(CacheParams, p.CacheParams);
+    //cpuid->addStandardFunc(ExtendedFeatures, p.ExtendedFeatures);
+    //cpuid->addStandardFunc(ExtendedState, p.ExtendedState);
+
+    //cpuid->addExtendedFunc(FamilyModelSteppingBrandFeatures,
+    //                      p.FamilyModelSteppingBrandFeatures);
+    //cpuid->addExtendedFunc(L1CacheAndTLB, p.L1CacheAndTLB);
+    //cpuid->addExtendedFunc(L2L3CacheAndL2TLB, p.L2L3CacheAndL2TLB);
+    //cpuid->addExtendedFunc(APMInfo, p.APMInfo);
+    //cpuid->addExtendedFunc(LongModeAddressSize, p.LongModeAddressSize);
 
     _regClasses.push_back(&flatIntRegClass);
     _regClasses.push_back(&flatFloatRegClass);
@@ -184,6 +204,10 @@ copyMiscRegs(ThreadContext *src, ThreadContext *dest)
     // The TSC has to be updated with side-effects if the CPUs in a
     // CPU switch have different frequencies.
     dest->setMiscReg(misc_reg::Tsc, src->readMiscReg(misc_reg::Tsc));
+    //
+    X86ISA::McgCap mcgCap = src->readMiscReg(misc_reg::McgCap);
+    mcgCap.count = 8;
+    dest->setMiscReg(misc_reg::McgCap, mcgCap);
 
     dest->getMMUPtr()->flushAll();
 }
@@ -218,6 +242,9 @@ ISA::readMiscRegNoEffect(RegIndex idx) const
 RegVal
 ISA::readMiscReg(RegIndex idx)
 {
+
+    //DPRINTF(X86, "Reading misc reg %#x, value: %#llx\n", idx, regVal[idx]);
+
     if (idx == misc_reg::Tsc) {
         return regVal[misc_reg::Tsc] + tc->getCpuPtr()->curCycle();
     }
@@ -233,6 +260,10 @@ ISA::readMiscReg(RegIndex idx)
         base.bsp = (tc->contextId() == 0);
         return base;
     }
+
+    //if (idx == misc_reg::Xcr0) {
+    //    return regVal[idx] | 1;
+    //}
 
     return readMiscRegNoEffect(idx);
 }
@@ -328,6 +359,8 @@ ISA::setMiscReg(RegIndex idx, RegVal val)
         break;
       case misc_reg::Cr8:
         break;
+      //case misc_reg::Xcr0:
+        //break;
       case misc_reg::Rflags:
         {
             RFLAGS rflags = val;
@@ -481,6 +514,8 @@ ISA::setMiscReg(RegIndex idx, RegVal val)
 void
 ISA::serialize(CheckpointOut &cp) const
 {
+    //BaseISA::serialize(cp);
+
     SERIALIZE_ARRAY(regVal, misc_reg::NumRegs);
 }
 

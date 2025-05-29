@@ -127,7 +127,7 @@ class Time
     {
         double seconds = floor(new_time);
         sec((time_t)seconds);
-        nsec((long)((seconds - new_time) * 1e9));
+        nsec((long)((new_time - seconds) * 1e9));
         return *this;
     }
 

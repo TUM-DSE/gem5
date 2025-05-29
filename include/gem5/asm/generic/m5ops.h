@@ -80,6 +80,8 @@
 
 #define M5OP_WORKLOAD           0x70
 
+#define M5OP_UTIMER             0x80
+#define M5OP_UTIMEREND          0x90
 
 #define M5OP_FOREACH                                            \
     M5OP(m5_arm, M5OP_ARM)                                      \
@@ -108,6 +110,8 @@
     M5OP(m5_work_end, M5OP_WORK_END)                            \
     M5OP(m5_dist_toggle_sync, M5OP_DIST_TOGGLE_SYNC)            \
     M5OP(m5_workload, M5OP_WORKLOAD)                            \
+    M5OP(m5_utimer, M5OP_UTIMER)                            \
+    M5OP(m5_utimer_end, M5OP_UTIMEREND)
 
 #define M5OP_MERGE_TOKENS_I(a, b) a##b
 #define M5OP_MERGE_TOKENS(a, b) M5OP_MERGE_TOKENS_I(a, b)

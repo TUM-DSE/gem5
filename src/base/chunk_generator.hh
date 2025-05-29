@@ -74,6 +74,8 @@ class ChunkGenerator
     /** The maximum chunk size, e.g., the cache block size or page size. */
     const Addr chunkSize;
 
+    bool is_first_of_chunk;
+
   public:
     /**
      * Constructor.
@@ -85,7 +87,7 @@ class ChunkGenerator
      * @ingroup api_chunk_generator
      */
     ChunkGenerator(Addr _startAddr, Addr totalSize, Addr _chunkSize) :
-        startAddr(_startAddr), chunkSize(_chunkSize)
+        startAddr(_startAddr), chunkSize(_chunkSize), is_first_of_chunk(true)
     {
         // chunkSize must be a power of two
         assert(chunkSize == 0 || isPowerOf2(chunkSize));
@@ -124,6 +126,7 @@ class ChunkGenerator
      */
     Addr size() const { return curSize; }
 
+    bool isHead() { return is_first_of_chunk; }
     /**
      * Number of bytes we have already chunked up.
      *
@@ -194,6 +197,9 @@ class ChunkGenerator
         sizeLeft -= curSize;
         nextAddr += curSize;
         nextSize = std::min(sizeLeft, chunkSize);
+
+        is_first_of_chunk = false;
+
         return true;
     }
 };

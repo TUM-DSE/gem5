@@ -64,6 +64,25 @@ decodeAddrOffset(Addr offset, uint8_t &func)
     func = bits(offset, 15, 8);
 }
 
+/**
+ * This struct wrapper for Addr enables m5ops for systems with 32 bit pointer,
+ * since it allows to distinguish between address arguments and native C++
+ * types. GuestAddr is only a temporary solution and will likely replaced in
+ * the future.
+*/
+//struct GuestAddr
+//{
+//    Addr addr;
+    /** Constructor is necessary to cast from uint64_t to GuestAddr. */
+//    GuestAddr(Addr _addr) : addr(_addr) {}
+//};
+
+//inline std::ostream&
+//operator<<(std::ostream& os, const GuestAddr addr)
+//{
+//    return os << addr.addr;
+//}
+
 void arm(ThreadContext *tc);
 void quiesce(ThreadContext *tc);
 void quiesceSkip(ThreadContext *tc);
@@ -91,9 +110,12 @@ void debugbreak(ThreadContext *tc);
 void switchcpu(ThreadContext *tc);
 void workbegin(ThreadContext *tc, uint64_t workid, uint64_t threadid);
 void workend(ThreadContext *tc, uint64_t workid, uint64_t threadid);
+void utimer(ThreadContext *tc, Tick time);
+void utimer_end(ThreadContext *tc);
 void m5Syscall(ThreadContext *tc);
 void togglesync(ThreadContext *tc);
 void triggerWorkloadEvent(ThreadContext *tc);
+
 
 /**
  * Execute a decoded M5 pseudo instruction
@@ -228,6 +250,13 @@ pseudoInstWork(ThreadContext *tc, uint8_t func, uint64_t &result)
 
       case M5OP_WORKLOAD:
         invokeSimcall<ABI>(tc, triggerWorkloadEvent);
+        return true;
+
+      case M5OP_UTIMER:
+        invokeSimcall<ABI>(tc, utimer);
+        return true;
+      case M5OP_UTIMEREND:
+        invokeSimcall<ABI>(tc, utimer_end);
         return true;
 
       default:

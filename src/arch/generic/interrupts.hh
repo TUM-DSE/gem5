@@ -57,7 +57,7 @@ class BaseInterrupts : public SimObject
     /*
      * Return whether there are any interrupts waiting to be recognized.
      */
-    virtual bool checkInterrupts() const = 0;
+    virtual bool checkInterrupts() = 0;
     /*
      * Return an interrupt to process. This should return an interrupt exactly
      * when checkInterrupts returns true.
@@ -89,6 +89,12 @@ class BaseInterrupts : public SimObject
     {
         panic("Interrupts::clearAll unimplemented!\n");
     }
+
+    //virtual bool
+    //isWakeUp() const
+    //{
+    //    return true;
+    //}
 };
 
 } // namespace gem5

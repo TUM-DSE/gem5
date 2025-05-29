@@ -180,6 +180,19 @@ X86ISA::I82094AA::readReg(uint8_t offset)
 void
 X86ISA::I82094AA::requestInterrupt(int line)
 {
+    if (line == -1) {
+
+        TriggerIntMessage message = 0;
+
+        message.destination = 0xFF;
+        message.deliveryMode = delivery_mode::Fixed;
+        message.destMode = 0;
+        message.level = 0;
+        message.trigger = 0;
+        message.vector = 37;
+        signalInterrupt(message);
+        return;
+    }
     DPRINTF(I82094AA, "Received interrupt %d.\n", line);
     assert(line < TableSize);
     RedirTableEntry entry = redirTable[line];

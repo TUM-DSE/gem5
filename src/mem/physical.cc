@@ -103,6 +103,7 @@ PhysicalMemory::PhysicalMemory(const std::string& _name,
             // calculate the total size once and for all
             size += m->size();
 
+            std::cout << "Range is : " << m->getAddrRange().start() << " <> " << m->getAddrRange().end() << std::endl;
             // add the range to our interval tree and make sure it does not
             // intersect an existing range
             fatal_if(addrMap.insert(m->getAddrRange(), m) == addrMap.end(),
@@ -139,9 +140,12 @@ PhysicalMemory::PhysicalMemory(const std::string& _name,
     for (const auto& r : addrMap) {
         // simply skip past all memories that are null and hence do
         // not need any backing store
+        std::cout << "Here\n";
         if (!r.second->isNull()) {
+            std::cout << "Here2\n";
             // if the range is interleaved then save it for now
             if (r.first.interleaved()) {
+                std::cout << "Here3\n";
                 // if we already got interleaved ranges that are not
                 // part of the same range, then first do a merge
                 // before we add the new one
@@ -157,6 +161,7 @@ PhysicalMemory::PhysicalMemory(const std::string& _name,
                             fatal("Inconsistent flags in an interleaved "
                                   "range\n");
 
+                    std::cout << "Range is: " << merged_range.start() << " -> " << merged_range.end() << std::endl;
                     createBackingStore(merged_range, curr_memories,
                                        f->isConfReported(), f->isInAddrMap(),
                                        f->isKvmMap());
@@ -467,6 +472,7 @@ PhysicalMemory::unserializeStore(CheckpointIn &cp)
     long* pmem_current;
     uint32_t bytes_read;
     while (curr_size < range.size()) {
+        //bytes_read = gzread(compressed_mem, pmem, chunk_size);
         bytes_read = gzread(compressed_mem, temp_page, chunk_size);
         if (bytes_read == 0)
             break;
@@ -482,6 +488,7 @@ PhysicalMemory::unserializeStore(CheckpointIn &cp)
             }
         }
         curr_size += bytes_read;
+        //pmem += bytes_read;
     }
 
     delete[] temp_page;

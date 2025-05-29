@@ -556,6 +556,7 @@ MemDepUnit::squash(const InstSeqNum &squashed_num, ThreadID tid)
         (*hash_it).second = NULL;
 
         memDepHash.erase(hash_it);
+        (*squash_it)->setSquashed();
 #ifdef GEM5_DEBUG
         MemDepEntry::memdep_erase++;
 #endif
@@ -593,6 +594,9 @@ MemDepUnit::findInHash(const DynInstConstPtr &inst)
 {
     MemDepHashIt hash_it = memDepHash.find(inst->seqNum);
 
+    if (hash_it == memDepHash.end()) {
+        std::cout << inst->staticInst->getName() << std::endl;
+    }
     assert(hash_it != memDepHash.end());
 
     return (*hash_it).second;

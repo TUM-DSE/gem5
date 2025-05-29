@@ -128,6 +128,15 @@ class Interrupts : public BaseInterrupts
      */
     uint8_t IRRV = 0;
     uint8_t ISRV = 0;
+    uint8_t IRRVUSER = 0;
+    uint8_t ISRVUSER = 0;
+    int printInterruptCount = 0;
+    int auxPending = 0;
+
+    EventFunctionWrapper pendingEvent;
+    void processPendingEvent();
+    EventFunctionWrapper unlockEvent;
+    void processUnlockEvent();
 
     int
     findRegArrayMSB(ApicRegIndex base)
@@ -173,8 +182,13 @@ class Interrupts : public BaseInterrupts
 
     Tick clockPeriod() const { return clockDomain.clockPeriod(); }
 
+public:
     void requestInterrupt(uint8_t vector, uint8_t deliveryMode, bool level);
+    static inline Tick userPciTimeout = 1e12;
+    static inline uint8_t userPciThreshold = 32;
+    Tick userPciTimeStart = 0;
 
+protected:
     int initialApicId = 0;
 
     // Ports for interrupt messages.
@@ -192,7 +206,6 @@ class Interrupts : public BaseInterrupts
     Addr pioAddr = MaxAddr;
 
   public:
-
     int getInitialApicId() { return initialApicId; }
 
     /*
@@ -254,7 +267,7 @@ class Interrupts : public BaseInterrupts
      */
 
     uint32_t readReg(ApicRegIndex miscReg);
-    void setReg(ApicRegIndex reg, uint32_t val);
+    void setReg(ApicRegIndex reg, uint32_t val, Tick tick);
     void
     setRegNoEffect(ApicRegIndex reg, uint32_t val)
     {
@@ -271,7 +284,7 @@ class Interrupts : public BaseInterrupts
      * Functions for retrieving interrupts for the CPU to handle.
      */
 
-    bool checkInterrupts() const override;
+    bool checkInterrupts() override;
     /**
      * Check if there are pending interrupts without ignoring the
      * interrupts disabled flag.
@@ -287,6 +300,8 @@ class Interrupts : public BaseInterrupts
     bool hasPendingUnmaskable() const { return pendingUnmaskableInt; }
     Fault getInterrupt() override;
     void updateIntrInfo() override;
+    void updateIntrInfo(const Fault &interrupt);
+    void clearUser() { ISRVUSER = 0; }
 
     /*
      * Serialization.

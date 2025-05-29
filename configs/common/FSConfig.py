@@ -38,12 +38,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from common import ObjectList
+from common.Benchmarks import *
+
 import m5
 import m5.defines
 from m5.objects import *
 from m5.util import *
-from common.Benchmarks import *
-from common import ObjectList
 
 # Populate to reflect supported os types per target ISA
 os_types = set()
@@ -542,9 +543,27 @@ def makeX86System(mem_mode, numCPUs=1, mdesc=None, workload=None, Ruby=False):
             AddrRange("3GB"),
             AddrRange(Addr("4GB"), size=excess_mem_size),
         ]
-
+    num_nics = 1
+    nics = []
+    for i in range(num_nics):
+        # nics.append(IGbE_e1000(adq_idx=i,pci_bus=0, pci_dev=i, pci_func=0,
+        #                  InterruptLine=(16+i), InterruptPin=1))
+        nics.append(IGbE_e1000(pci_bus=0, pci_dev=i, pci_func=0,
+                          InterruptLine=(16+i), InterruptPin=1))
+    self.ethif = EtherLink(speed = '1000Gbps')
+    self.ethif.int0 = nics[0].interface
+    class ModifiedPc(Pc):
+        def __init__(self,nics):
+            super(ModifiedPc, self).__init__()
+            self.nics = nics
+        def attachIO(self, bus, dma_ports = []):
+            super(ModifiedPc, self).attachIO(bus, dma_ports)
+            for dev in self.nics:
+                dev.host = self.pci_host
+                dev.dma = bus.cpu_side_ports
+                dev.pio = bus.mem_side_ports
     # Platform
-    self.pc = Pc()
+    self.pc = ModifiedPc(nics)
 
     # Create and connect the busses required by each memory system
     if Ruby:
@@ -712,7 +731,7 @@ def makeLinuxX86System(
 
     # Command line
     if not cmdline:
-        cmdline = "earlyprintk=ttyS0 console=ttyS0 lpj=7999923 root=/dev/hda1"
+        cmdline = "earlyprintk=ttyS0 console=ttyS0 lpj=7999923 root=/dev/sda1"
     self.workload.command_line = fillInCmdline(mdesc, cmdline)
     return self
 

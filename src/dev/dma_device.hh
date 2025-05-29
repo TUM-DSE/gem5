@@ -56,6 +56,13 @@
 namespace gem5
 {
 
+struct AdaptiveDdioFlag
+{
+  bool bypassMlc = false;
+  bool bypassLlc = false;
+  bool bypassCache = false;
+};
+
 class ClockedObject;
 
 class DmaPort : public RequestPort, public Drainable
@@ -119,13 +126,15 @@ class DmaPort : public RequestPort, public Drainable
         /** Command for the request. */
         const Packet::Command cmd;
 
+        bool is_ddio_req = false;
+        int adq_idx = -1; // -1 is for Not IDIO mode (legacy DDIO)
         DmaReqState(Packet::Command _cmd, Addr addr, Addr chunk_sz, Addr tb,
                     uint8_t *_data, Request::Flags _flags, RequestorID _id,
                     uint32_t _sid, uint32_t _ssid, Event *ce, Tick _delay,
-                    Event *ae=nullptr)
+                    bool _is_ddio_req, int _adq_idx, Event *ae=nullptr)
             : completionEvent(ce), abortEvent(ae), totBytes(tb), delay(_delay),
               gen(addr, tb, chunk_sz), data(_data), flags(_flags), id(_id),
-              sid(_sid), ssid(_ssid), cmd(_cmd)
+              sid(_sid), ssid(_ssid), cmd(_cmd), is_ddio_req(_is_ddio_req), adq_idx(_adq_idx)
         {}
 
         PacketPtr createPacket();
@@ -207,6 +216,37 @@ class DmaPort : public RequestPort, public Drainable
               uint8_t *data, uint32_t sid, uint32_t ssid, Tick delay,
               Request::Flags flag=0);
 
+    void
+    ddioAction(Packet::Command cmd, Addr addr, int size, Event *event,
+               uint8_t *data, Tick delay, AdaptiveDdioFlag structDdioFlag, Request::Flags flag=0);
+
+    void
+    ddioAction(Packet::Command cmd, Addr addr, int size, Event *event,
+               uint8_t *data, uint32_t sid, uint32_t ssid,
+               Tick delay, AdaptiveDdioFlag structDdioFlag, Request::Flags flag=0);
+
+    void
+    ddioActionAdq(Packet::Command cmd, Addr addr, int size, Event *event,
+                  uint8_t *data, Tick delay, AdaptiveDdioFlag structDdioFlag,
+                  Request::Flags flag = 0, bool is_ddio = false, int qnum = -1);
+
+    void
+    ddioActionAdq(Packet::Command cmd, Addr addr, int size, Event *event,
+                  uint8_t *data, uint32_t sid, uint32_t ssid, Tick delay,
+                  AdaptiveDdioFlag structDdioFlag,
+                  Request::Flags flag = 0, bool is_ddio = false, int qnum = -1);
+
+    void
+    IdioAction(Packet::Command cmd, Addr addr, int size, Event *event,
+               uint8_t *data, Tick delay, AdaptiveDdioFlag structDdioFlag,
+               Request::Flags flag = 0, bool is_ddio = false, int qnum = -1);
+
+    void
+    IdioAction(Packet::Command cmd, Addr addr, int size, Event *event,
+               uint8_t *data, uint32_t sid, uint32_t ssid, Tick delay,
+               AdaptiveDdioFlag structDdioFlag,
+               Request::Flags flag = 0, bool is_ddio = false, int qnum = -1);
+
     // Abort and remove any pending DMA transmissions.
     void abortPending();
 
@@ -225,6 +265,11 @@ class DmaDevice : public PioDevice
     DmaDevice(const Params &p);
     virtual ~DmaDevice() = default;
 
+    virtual AdaptiveDdioFlag getAdaptiveDdioFlag(void *opts)
+    {
+      AdaptiveDdioFlag res;
+      return res;
+    }
     void
     dmaWrite(Addr addr, int size, Event *event, uint8_t *data,
              uint32_t sid, uint32_t ssid, Tick delay=0)
@@ -252,7 +297,55 @@ class DmaDevice : public PioDevice
     {
         dmaPort.dmaAction(MemCmd::ReadReq, addr, size, event, data, delay);
     }
+    void ddioWrite(Addr addr, int size, Event *event, uint8_t *data,
+                   Tick delay = 0, void *ddioflag = 0)
+    {
+        dmaPort.ddioAction(MemCmd::WriteReq, addr, size, event, data, delay, getAdaptiveDdioFlag(ddioflag), 0);
+    }
 
+    void ddioWrite(Addr addr, int size, Event *event, uint8_t *data, uint32_t sid, uint32_t ssid,
+                   Tick delay = 0, void *ddioflag = 0)
+    {
+        dmaPort.ddioAction(MemCmd::WriteReq, addr, size, event, data, sid, ssid, delay, getAdaptiveDdioFlag(ddioflag), 0);
+    }
+
+    void ddioRead(Addr addr, int size, Event *event, uint8_t *data,
+                  Tick delay = 0, void *ddioflag = 0)
+    {
+        dmaPort.ddioAction(MemCmd::ReadReq, addr, size, event, data, delay, getAdaptiveDdioFlag(ddioflag), 0);
+    }
+
+    void ddioRead(Addr addr, int size, Event *event, uint8_t *data, uint32_t sid, uint32_t ssid,
+                  Tick delay = 0, void *ddioflag = 0)
+    {
+        dmaPort.ddioAction(MemCmd::ReadReq, addr, size, event, data, sid, ssid, delay, getAdaptiveDdioFlag(ddioflag), 0);
+    }
+
+    void IdioWrite(Addr addr, int size, Event *event, uint8_t *data, uint32_t sid, uint32_t ssid,
+                  Tick delay = 0, void *ddioflag = 0, int qnum = -1)
+    {
+        // DPRINTF(AdaptiveDdioOtf, "ddioWriteAdq qnum %d\n", qnum);
+        dmaPort.IdioAction(MemCmd::WriteReq, addr, size, event, data, sid, ssid, delay, getAdaptiveDdioFlag(ddioflag), 0, true, qnum);
+    }
+
+    void IdioWrite(Addr addr, int size, Event *event, uint8_t *data,
+                   Tick delay = 0, void *ddioflag = 0, int qnum = -1)
+    {
+        // DPRINTF(AdaptiveDdioOtf, "ddioWriteAdq qnum %d\n", qnum);
+        dmaPort.IdioAction(MemCmd::WriteReq, addr, size, event, data, delay, getAdaptiveDdioFlag(ddioflag), 0, true, qnum);
+    }
+
+    void IdioRead(Addr addr, int size, Event *event, uint8_t *data, uint32_t sid, uint32_t ssid,
+                  Tick delay = 0, void *ddioflag = 0, int qnum = -1)
+    {
+        dmaPort.IdioAction(MemCmd::ReadReq, addr, size, event, data, sid, ssid, delay, getAdaptiveDdioFlag(ddioflag), 0, true, qnum);
+    }
+
+    void IdioRead(Addr addr, int size, Event *event, uint8_t *data,
+                  Tick delay = 0, void *ddioflag = 0, int qnum = -1)
+    {
+        dmaPort.IdioAction(MemCmd::ReadReq, addr, size, event, data, delay, getAdaptiveDdioFlag(ddioflag), 0, true, qnum);
+    }
     bool dmaPending() const { return dmaPort.dmaPending(); }
 
     void init() override;

@@ -45,6 +45,7 @@
 #include "base/logging.hh"
 #include "cpu/null_static_inst.hh"
 #include "sim/faults.hh"
+#include "arch/x86/interrupts.hh"
 
 namespace gem5
 {
@@ -367,7 +368,61 @@ class StartupInterrupt : public X86Interrupt
     void invoke(ThreadContext *tc, const StaticInstPtr &inst=
                 nullStaticInstPtr) override;
 };
+class Interrupts;
+class UserInterrupt : public X86Interrupt
+{
+  private:
+    Interrupts *interrupt_controller;
 
+  public:
+    static bool FirstTime;
+
+  public:
+    UserInterrupt(uint8_t _vector, Interrupts *_interrupt_controller) : X86Interrupt("User Interrupt", "#SIPI", _vector)
+    {
+      interrupt_controller = _interrupt_controller;
+      userInt = true;
+    }
+
+      void invoke(ThreadContext *tc, const StaticInstPtr &inst =
+                                         nullStaticInstPtr) override;
+};
+class UserTimer : public X86Interrupt
+{
+  private:
+    Interrupts *interrupt_controller;
+
+  public:
+    static bool FirstTime;
+
+  public:
+    UserTimer(uint8_t _vector, Interrupts *_interrupt_controller) : X86Interrupt("User Interrupt", "#SIPI", _vector)
+    {
+      interrupt_controller = _interrupt_controller;
+      userInt = true;
+    }
+
+    void invoke(ThreadContext *tc, const StaticInstPtr &inst =
+                                        nullStaticInstPtr) override;
+};
+class UserPci : public X86Interrupt
+{
+  private:
+    Interrupts *interrupt_controller;
+
+  public:
+    static bool FirstTime;
+
+  public:
+    UserPci(uint8_t _vector, Interrupts *_interrupt_controller) : X86Interrupt("User Pci", "#SIPI", _vector)
+    {
+      interrupt_controller = _interrupt_controller;
+      userInt = true;
+    }
+
+    void invoke(ThreadContext *tc, const StaticInstPtr &inst =
+                                        nullStaticInstPtr) override;
+};
 } // namespace X86ISA
 } // namespace gem5
 

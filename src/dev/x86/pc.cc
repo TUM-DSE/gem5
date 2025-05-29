@@ -42,6 +42,7 @@
 
 namespace gem5
 {
+    Tick *timer_tix = nullptr;
 
 Pc::Pc(const Params &p) : Platform(p), southBridge(p.south_bridge)
 {}
@@ -55,6 +56,7 @@ Pc::init()
      * Initialize the timer.
      */
     auto &timer = *southBridge->pit;
+    timer_tix = &(timer.eventQueue()->_curTick);
     //Timer 0, mode 2, no bcd, 16 bit count
     timer.writeControl(0x34);
     //Timer 0, latch command
@@ -122,6 +124,12 @@ void
 Pc::postPciInt(int line)
 {
     southBridge->ioApic->requestInterrupt(line);
+}
+
+void
+Pc::postPciUInt()
+{
+    southBridge->ioApic->requestInterrupt(-1);
 }
 
 void

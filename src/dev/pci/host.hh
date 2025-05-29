@@ -117,6 +117,10 @@ class PciHost : public PioDevice
         void postInt();
 
         /**
+         * Post a PCI user interrupt to the CPU.
+         */
+        void postUInt();
+        /**
          * Clear a posted PCI interrupt
          */
         void clearInt();
@@ -284,6 +288,7 @@ class GenericPciHost : public PciHost
     Tick write(PacketPtr pkt) override;
 
     AddrRangeList getAddrRanges() const override;
+    void postUInt();
 
   protected: // PciHost
     Addr pioAddr(const PciBusAddr &bus_addr, Addr pci_addr) const override {

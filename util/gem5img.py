@@ -42,16 +42,24 @@
 # Script for managing a gem5 disk image.
 #
 
-from argparse import ArgumentParser
 import os
-from os import environ as env
-import string
-from subprocess import CalledProcessError, Popen, PIPE, STDOUT
-from sys import exit, argv
 import re
+import string
+from argparse import ArgumentParser
+from os import environ as env
+from subprocess import (
+    PIPE,
+    STDOUT,
+    CalledProcessError,
+    Popen,
+)
+from sys import (
+    argv,
+    exit,
+)
 
 # Some constants.
-MaxLBACylinders = 16383
+MaxLBACylinders = 16383 * 2
 MaxLBAHeads = 16
 MaxLBASectors = 63
 MaxLBABlocks = MaxLBACylinders * MaxLBAHeads * MaxLBASectors
@@ -64,6 +72,7 @@ env["PATH"] += ":/sbin:/usr/sbin"
 
 # Whether to print debug output.
 debug = False
+
 
 # Figure out cylinders, heads and sectors from a size in blocks.
 def chsFromSize(sizeInBlocks):
@@ -186,6 +195,7 @@ def findPartOffset(devFile, fileName, partition):
         r"start=\s*(?P<start>\d+),\s*"  # Partition start record
         r"size=\s*(?P<size>\d+),\s*"  # Partition size record
         r"type=(?P<type>\d+)"  # Partition type record
+        #r".*"  # anything else, e.g., name field
         r"\s*$"  # End of line
     )
     lines = out.splitlines()

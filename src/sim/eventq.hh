@@ -619,8 +619,11 @@ class EventQueue
 
     std::string objName;
     Event *head;
+
+public:
     Tick _curTick;
 
+private:
     //! Mutex to protect async queue.
     UncontendedMutex async_queue_mutex;
 

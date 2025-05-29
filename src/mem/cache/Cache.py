@@ -1,4 +1,4 @@
-# Copyright (c) 2012-2013, 2015, 2018 ARM Limited
+# Copyright (c) 2012-2013, 2015, 2018, 2023-2024 ARM Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -118,6 +118,9 @@ class BaseCache(ClockedObject):
     replacement_policy = Param.BaseReplacementPolicy(
         LRURP(), "Replacement policy"
     )
+    #partitioning_manager = Param.PartitionManager(
+    #    NULL, "Cache partitioning manager"
+    #)
 
     compressor = Param.BaseCacheCompressor(NULL, "Cache compressor.")
     replace_expansions = Param.Bool(
@@ -173,12 +176,30 @@ class BaseCache(ClockedObject):
     # data cache.
     write_allocator = Param.WriteAllocator(NULL, "Write allocator")
 
+    is_mlc = Param.Bool(False)
+    mlc_idx = Param.Int(-1)
+    is_iocache = Param.Bool(False)
+    send_header_only = Param.Bool(False)
+    mlc_ddio = Param.Bool(False)
+
+    
+    ddio_enabled = Param.Bool(True, "Enabled DDIO?")
+    ddio_disabled = Param.Bool(False, "Disabled DDIO?")
+    is_llc = Param.Bool(False, "Is this cache the llc?")
+    ddio_way_part = Param.Int(-1, "way partitioning for ddio; "
+                                  "-1 means all sets can be used")
+
 
 class Cache(BaseCache):
     type = "Cache"
     cxx_header = "mem/cache/cache.hh"
     cxx_class = "gem5::Cache"
 
+    is_mlc = False
+    mlc_idx = -1
+    is_iocache = False
+    send_header_only = False
+    mlc_ddio = False
 
 class NoncoherentCache(BaseCache):
     type = "NoncoherentCache"

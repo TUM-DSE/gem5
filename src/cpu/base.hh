@@ -48,6 +48,7 @@
 #include "arch/generic/interrupts.hh"
 #include "base/statistics.hh"
 #include "debug/Mwait.hh"
+//#include "dev/intpin.hh"
 #include "mem/htm.hh"
 #include "mem/port_proxy.hh"
 #include "sim/clocked_object.hh"
@@ -155,6 +156,30 @@ class BaseCPU : public ClockedObject
 
         statistics::Formula hostInstRate;
         statistics::Formula hostOpRate;
+
+        /*Counter previousInsts = 0;
+        Counter previousOps = 0;
+
+        static Counter
+        numSimulatedInsts()
+        {
+            return totalNumSimulatedInsts() - (globalStats->previousInsts);
+        }
+
+        static Counter
+        numSimulatedOps()
+        {
+            return totalNumSimulatedOps() - (globalStats->previousOps);
+        }
+
+        void
+        resetStats() override
+        {
+            previousInsts = totalNumSimulatedInsts();
+            previousOps = totalNumSimulatedOps();
+
+            statistics::Group::resetStats();
+        }*/
     };
 
     /**
@@ -215,10 +240,22 @@ class BaseCPU : public ClockedObject
     uint32_t getPid() const { return _pid; }
     void setPid(uint32_t pid) { _pid = pid; }
 
-    inline void workItemBegin() { baseStats.numWorkItemsStarted++; }
-    inline void workItemEnd() { baseStats.numWorkItemsCompleted++; }
+    inline void workItemBegin()
+    {
+      baseStats.numWorkItemsStarted++;
+      roiRange.startPC = threadContexts[0]->pcState().instAddr();
+      std::cout << "HERE WE GO Start: " << roiRange.startPC << std::endl;
+    }
+    inline void workItemEnd()
+    {
+      baseStats.numWorkItemsCompleted++;
+      roiRange.endPC = threadContexts[0]->pcState().instAddr();
+      std::cout << "HERE WE GO END: " << roiRange.endPC << std::endl;
+    }
     // @todo remove me after debugging with legion done
     Tick instCount() { return instCnt; }
+
+    bool isKvm = false;
 
   protected:
     std::vector<BaseInterrupts*> interrupts;
@@ -258,6 +295,8 @@ class BaseCPU : public ClockedObject
 
   protected:
     std::vector<ThreadContext *> threadContexts;
+
+    //std::vector<std::unique_ptr<IntSourcePin<BaseCPU>>> cpuIdlePins;
 
     trace::InstTracer * tracer;
 
@@ -644,6 +683,23 @@ class BaseCPU : public ClockedObject
         statistics::Scalar numWorkItemsStarted;
         statistics::Scalar numWorkItemsCompleted;
     } baseStats;
+    struct ROIRange
+    {
+      Addr startPC;
+      Addr endPC;
+      inline bool inRange(Addr pc)
+      {
+        return pc >= startPC && pc <= endPC;
+      }
+    } roiRange;
+
+    bool startROI = false;
+    Tick timerTicks;
+    Tick nextTick;
+    bool timerEnable = false;
+    bool timerNext = false;
+    bool timerTrigger = false;
+    bool timerResetting = false;
 
   private:
     std::vector<AddressMonitor> addressMonitor;

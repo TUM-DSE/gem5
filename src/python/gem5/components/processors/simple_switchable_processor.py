@@ -24,17 +24,20 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from ..boards.mem_mode import MemMode
-from ..boards.abstract_board import AbstractBoard
-from ..processors.simple_core import SimpleCore
-from ..processors.cpu_types import CPUTypes, get_mem_mode
-from .switchable_processor import SwitchableProcessor
-from ...isas import ISA
+from typing import Optional
+
 from m5.util import warn
 
+from ...isas import ISA
 from ...utils.override import *
-
-from typing import Optional
+from ..boards.abstract_board import AbstractBoard
+from ..boards.mem_mode import MemMode
+from ..processors.cpu_types import (
+    CPUTypes,
+    get_mem_mode,
+)
+from ..processors.simple_core import SimpleCore
+from .switchable_processor import SwitchableProcessor
 
 
 class SimpleSwitchableProcessor(SwitchableProcessor):
@@ -51,19 +54,16 @@ class SimpleSwitchableProcessor(SwitchableProcessor):
         switch_core_type: CPUTypes,
         num_cores: int,
         isa: Optional[ISA] = None,
+        interrupt_type = ""
     ) -> None:
         """
         :param starting_core_type: The CPU type for each type in the processor
-        to start with (i.e., when the simulation has just started).
-
+                                   to start with (i.e., when the simulation has
+                                   just started).
         :param switch_core_types: The CPU type for each core, to be switched
-        to..
+        to.
 
-        :param isa: The ISA of the processor. This argument is optional. If not
-        set the `runtime.get_runtime_isa` is used to determine the ISA at
-        runtime. **WARNING**: This functionality is deprecated. It is
-        recommended you explicitly set your ISA via SimpleSwitchableProcessor
-        construction.
+        :param isa: The ISA of the processor.
         """
 
         if not isa:
@@ -86,11 +86,11 @@ class SimpleSwitchableProcessor(SwitchableProcessor):
 
         switchable_cores = {
             self._start_key: [
-                SimpleCore(cpu_type=starting_core_type, core_id=i, isa=isa)
+                SimpleCore(cpu_type=starting_core_type, core_id=i, isa=isa,interrupt_type=interrupt_type)
                 for i in range(num_cores)
             ],
             self._switch_key: [
-                SimpleCore(cpu_type=switch_core_type, core_id=i, isa=isa)
+                SimpleCore(cpu_type=switch_core_type, core_id=i, isa=isa,interrupt_type=interrupt_type)
                 for i in range(num_cores)
             ],
         }

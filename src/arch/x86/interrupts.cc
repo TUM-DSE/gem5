@@ -57,12 +57,15 @@
 #include "arch/x86/regs/misc.hh"
 #include "cpu/base.hh"
 #include "debug/LocalApic.hh"
+#include "debug/UserInterrupt.hh"
 #include "dev/x86/i82094aa.hh"
 #include "dev/x86/pc.hh"
 #include "dev/x86/south_bridge.hh"
 #include "mem/packet_access.hh"
 #include "sim/full_system.hh"
 #include "sim/system.hh"
+#include "cpu/o3/cpu.hh"
+#include "dev/net/load_generator.hh"
 
 namespace gem5
 {
@@ -211,6 +214,8 @@ Tick
 X86ISA::Interrupts::write(PacketPtr pkt)
 {
     Addr offset = pkt->getAddr() - pioAddr;
+    pkt->tick = curTick();
+    // assert(pkt->cpu);
     // Make sure we're at least only accessing one register.
     if ((offset & ~mask(3)) != ((offset + pkt->getSize()) & ~mask(3)))
         panic("Accessed more than one register at a time in the APIC!\n");
@@ -220,7 +225,7 @@ X86ISA::Interrupts::write(PacketPtr pkt)
     DPRINTF(LocalApic,
             "Writing Local APIC register %d at offset %#x as %#x.\n",
             reg, offset, letoh(val));
-    setReg(reg, letoh(val));
+    setReg(reg, letoh(val), pkt->tick);
     pkt->makeAtomicResponse();
     return pioDelay;
 }
@@ -238,8 +243,46 @@ X86ISA::Interrupts::requestInterrupt(uint8_t vector,
         DPRINTF(LocalApic, "Interrupt is an %s.\n",
                 delivery_mode::names[deliveryMode]);
         // Queue up the interrupt in the IRR.
-        if (vector > IRRV)
+        DPRINTF(LocalApic, "IRRV: %d, new vector: %d\n", IRRV, vector);
+        if (!tc->getCpuPtr()->isKvm) {
+            UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+            UintrTimerStatus uintrTimerStatus = tc->readMiscRegNoEffect(misc_reg::UintrTimerStatus);
+
+            UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
+            if (vector == 37) {
+                if (auxPending == 0) {
+                    userPciTimeStart = curTick();
+                }
+                if (!uintrPciDisable) {
+                    auxPending++;
+                    if (!tc->getCpuPtr()->isKvm && LoadGenerator::switched && auxPending) {
+                        if (!pendingEvent.scheduled()) {
+                            schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
+                        }
+                    }
+                    if (FullSystem)
+                        tc->getCpuPtr()->wakeup(0);
+                    return;
+                }
+                auxPending++;
+                if (FullSystem)
+                    tc->getCpuPtr()->wakeup(0);
+                return;
+            }
+            if (vector == uintrMisc.uinv || vector == uintrTimerStatus.uinv) {
+                DPRINTF(UserInterrupt, "IRRVUSER set %d", vector);
+                IRRVUSER = vector;
+                if (FullSystem)
+                    tc->getCpuPtr()->wakeup(0);
+                return;
+            }
+        } else if (vector == 37 || vector == 36) {
+            return;
+        }
+        if (vector > IRRV) {
+            DPRINTF(LocalApic, "IRRV is being overwritten\n");
             IRRV = vector;
+        }
         if (!getRegArrayBit(APIC_INTERRUPT_REQUEST_BASE, vector)) {
             setRegArrayBit(APIC_INTERRUPT_REQUEST_BASE, vector);
             if (level) {
@@ -247,6 +290,8 @@ X86ISA::Interrupts::requestInterrupt(uint8_t vector,
             } else {
                 clearRegArrayBit(APIC_TRIGGER_MODE_BASE, vector);
             }
+        } else if (vector == 33) {
+            printInterruptCount++;
         }
     } else if (!delivery_mode::isReserved(deliveryMode)) {
         DPRINTF(LocalApic, "Interrupt is an %s.\n",
@@ -350,7 +395,11 @@ X86ISA::Interrupts::recvMessage(PacketPtr pkt)
             DPRINTF(LocalApic,
                     "Got Trigger Interrupt message with vector %#x.\n",
                     message.vector);
-
+            UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+            if (message.vector == uintrMisc.uinv && message.vector) {
+                // reinterpret_cast<o3::CPU *>(pkt->cpu)->sendUipiSent();
+                reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->sendUipiRegister(pkt->tick);
+            }
             requestInterrupt(message.vector,
                     message.deliveryMode, message.trigger);
         }
@@ -439,7 +488,7 @@ X86ISA::Interrupts::readReg(ApicRegIndex reg)
 }
 
 void
-X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
+X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val, Tick tick)
 {
     uint32_t newVal = val;
     if (reg >= APIC_IN_SERVICE(0) &&
@@ -503,6 +552,7 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
       case APIC_INTERRUPT_COMMAND_LOW:
         {
             InterruptCommandRegLow low = regs[APIC_INTERRUPT_COMMAND_LOW];
+            bool userInterrupt = false;
             // Check if we're already sending an IPI.
             if (low.deliveryStatus) {
                 newVal = low;
@@ -517,6 +567,7 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
             message.destMode = low.destMode;
             message.level = low.level;
             message.trigger = low.trigger;
+
             std::list<int> apics;
             int numContexts = sys->threads.size();
             switch (low.destShorthand) {
@@ -580,6 +631,7 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
             regs[APIC_INTERRUPT_COMMAND_LOW] = low;
             for (auto id: apics) {
                 PacketPtr pkt = buildIntTriggerPacket(id, message);
+                pkt->tick = tick;
                 intRequestPort.sendMessage(pkt, sys->isTimingMode(),
                         [this](PacketPtr pkt) { completeIPI(pkt); });
             }
@@ -635,6 +687,8 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val)
 X86ISA::Interrupts::Interrupts(const Params &p)
     : BaseInterrupts(p), sys(p.system), clockDomain(*p.clk_domain),
       apicTimerEvent([this]{ processApicTimerEvent(); }, name()),
+      pendingEvent([this]{ processPendingEvent(); }, name()),
+      unlockEvent([this]{ processUnlockEvent(); }, name()),
       intResponsePort(name() + ".int_responder", this, this),
       intRequestPort(name() + ".int_requestor", this, this, p.int_latency),
       lint0Pin(name() + ".lint0", 0, this, 0),
@@ -663,22 +717,71 @@ X86ISA::Interrupts::Interrupts(const Params &p)
 
 
 bool
-X86ISA::Interrupts::checkInterrupts() const
+X86ISA::Interrupts::checkInterrupts()
 {
     RFLAGS rflags = tc->readMiscRegNoEffect(misc_reg::Rflags);
     if (pendingUnmaskableInt) {
         DPRINTF(LocalApic, "Reported pending unmaskable interrupt.\n");
+        if (ISRVUSER)
+            return false;
         return true;
     }
     if (rflags.intf) {
         if (pendingExtInt) {
             DPRINTF(LocalApic, "Reported pending external interrupt.\n");
+            if (ISRVUSER)
+                return false;
             return true;
         }
+        if (ISRVUSER) {
+            // std::cerr << "SERVICE? at: " << curTick() << "\n";
+            return false;
+        }
+        UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
+        UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
+        if (!uintrPciON && !uintrPciDisable) {
+            UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
+            if (curTick() > userPciTimeStart + userPciTimeout && (uintrPciPending + auxPending) > 0) {
+                if (!pendingEvent.scheduled()) {
+                    schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
+                }
+            }
+        }
         if (IRRV > ISRV && bits(IRRV, 7, 4) >
-               bits(regs[APIC_TASK_PRIORITY], 7, 4)) {
+                bits(regs[APIC_TASK_PRIORITY], 7, 4) && ISRV != 33) {
             DPRINTF(LocalApic, "Reported pending regular interrupt.\n");
             return true;
+        }
+        if (IRRVUSER && !ISRV) {
+            UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+            UintrTimerStatus uintrTimerStatus = tc->readMiscRegNoEffect(misc_reg::UintrTimerStatus);
+            X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(X86ISA::misc_reg::M5Reg);
+            if (m5reg.cpl && uintrMisc.uif && uintrTimerStatus.timer_on && uintrTimerStatus.timer_active && IRRVUSER == uintrTimerStatus.uinv) // magic number
+            {
+                DPRINTF(LocalApic, "Reported pending user timer.\n");
+                DPRINTF(UserInterrupt, "user timer");
+                return true;
+            }
+            if (uintrTimerStatus.timer_on && uintrTimerStatus.timer_active && IRRVUSER == uintrTimerStatus.uinv) {
+                return false;
+            }
+            if (m5reg.cpl && IRRVUSER == uintrMisc.uinv && uintrMisc.uif) {
+                // std::cerr << "DO COME\n";
+                DPRINTF(LocalApic, "Reported pending user interrupt.\n");
+                return true;
+            }
+            if (IRRVUSER == uintrMisc.uinv) {
+                // std::cerr << "UIF: " << (uintrMisc.uif ? "true" : "false") << " CPL: " << m5reg.cpl << std::endl;
+                return false;
+            }
+            UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
+            UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
+            if (m5reg.cpl && IRRVUSER == 37 && uintrMisc.uif && uintrPciON && !uintrPciDisable) {
+                // std::cerr << "DO COME\n";
+                DPRINTF(LocalApic, "Reported pending user interrupt pci.\n");
+                DPRINTF(UserInterrupt, "user pci");
+                return true;
+            }
         }
     }
     return false;
@@ -720,16 +823,77 @@ X86ISA::Interrupts::getInterrupt()
         DPRINTF(LocalApic, "Generated external interrupt fault object.\n");
         return std::make_shared<ExternalInterrupt>(extIntVector);
     } else {
-        DPRINTF(LocalApic, "Generated regular interrupt fault object.\n");
-        // The only thing left are fixed and lowest priority interrupts.
-        return std::make_shared<ExternalInterrupt>(IRRV);
+        if (IRRV > ISRV && bits(IRRV, 7, 4) >
+                              bits(regs[APIC_TASK_PRIORITY], 7, 4)) {
+            DPRINTF(LocalApic, "Generated regular interrupt fault object.\n");
+            // The only thing left are fixed and lowest priority interrupts.
+            return std::make_shared<ExternalInterrupt>(IRRV);
+        }
+        UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+
+        if (IRRVUSER == 36) { // magic number
+            DPRINTF(LocalApic, "Generated user timer fault object.\n");
+            return std::make_shared<UserTimer>(IRRVUSER, this);
+        }
+        if (IRRVUSER == uintrMisc.uinv) {
+            DPRINTF(LocalApic, "Generated user interrupt fault object.\n");
+            return std::make_shared<UserInterrupt>(IRRVUSER, this);
+        }
+        if (IRRVUSER == 37) {
+            DPRINTF(LocalApic, "Generated user pci fault object.\n");
+            return std::make_shared<UserPci>(IRRVUSER, this);
+        }
+    }
+}
+
+void
+X86ISA::Interrupts::updateIntrInfo(const Fault &interrupt)
+{
+    //assert(checkInterrupts()); BAD BAD
+    if (pendingUnmaskableInt) {
+        if (pendingSmi) {
+            DPRINTF(LocalApic, "SMI sent to core.\n");
+            pendingSmi = false;
+        } else if (pendingNmi) {
+            DPRINTF(LocalApic, "NMI sent to core.\n");
+            pendingNmi = false;
+        } else if (pendingInit) {
+            DPRINTF(LocalApic, "Init sent to core.\n");
+            pendingInit = false;
+            startedUp = false;
+        } else if (pendingStartup) {
+            DPRINTF(LocalApic, "SIPI sent to core.\n");
+            pendingStartup = false;
+            startedUp = true;
+        }
+        if (!(pendingSmi || pendingNmi || pendingInit || pendingStartup))
+            pendingUnmaskableInt = false;
+    } else if (pendingExtInt) {
+        pendingExtInt = false;
+    } else {
+        if (interrupt->userInt) {
+            ISRVUSER = IRRVUSER;
+            IRRVUSER = 0; // TODO NOT MORE THAN ONE VECTOR CAN BE DONE
+            return;
+        }
+        DPRINTF(LocalApic, "Interrupt %d sent to core.\n", IRRV);
+        // Mark the interrupt as "in service".
+        ISRV = IRRV;
+        setRegArrayBit(APIC_IN_SERVICE_BASE, ISRV);
+        // Clear it out of the IRR.
+        clearRegArrayBit(APIC_INTERRUPT_REQUEST_BASE, IRRV);
+        updateIRRV();
+        if (ISRV == 33 && printInterruptCount) {
+            printInterruptCount--;
+            requestInterrupt(33, delivery_mode::Fixed, false);
+        }
     }
 }
 
 void
 X86ISA::Interrupts::updateIntrInfo()
 {
-    assert(checkInterrupts());
+    //assert(checkInterrupts()); BAD BAD
     if (pendingUnmaskableInt) {
         if (pendingSmi) {
             DPRINTF(LocalApic, "SMI sent to core.\n");
@@ -758,6 +922,10 @@ X86ISA::Interrupts::updateIntrInfo()
         // Clear it out of the IRR.
         clearRegArrayBit(APIC_INTERRUPT_REQUEST_BASE, IRRV);
         updateIRRV();
+        if (ISRV == 33 && printInterruptCount) {
+            printInterruptCount--;
+            requestInterrupt(33, delivery_mode::Fixed, false);
+        }
     }
 }
 
@@ -822,7 +990,44 @@ void
 X86ISA::Interrupts::processApicTimerEvent()
 {
     if (triggerTimerInterrupt())
-        setReg(APIC_INITIAL_COUNT, readReg(APIC_INITIAL_COUNT));
+        setReg(APIC_INITIAL_COUNT, readReg(APIC_INITIAL_COUNT), 0);
+}
+
+void
+X86ISA::Interrupts::processPendingEvent()
+{
+    UintrPciLock uintrPciLock = tc->readMiscRegNoEffect(misc_reg::UintrPciLock);
+    if (!uintrPciLock && !unlockEvent.scheduled()) {
+        reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciLock, 2, tc->threadId()); // acquire lock
+        UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
+        UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
+        int64_t totalPending = auxPending + uintrPciPending;
+        if (!uintrPciON && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
+            uintrPciPending = totalPending;
+            auxPending = 0;
+            DPRINTF(UserInterrupt, "IRRVUSER set PCI");
+            IRRVUSER = 37;
+            if (FullSystem)
+                tc->getCpuPtr()->wakeup(0);
+            reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciON, 1, tc->threadId());
+            userPciTimeStart = curTick();
+        }
+        reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciPending, uintrPciPending, tc->threadId());
+        schedule(unlockEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(2)));
+    } else {
+        schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
+    }
+}
+
+void
+X86ISA::Interrupts::processUnlockEvent()
+{
+    UintrPciLock uintrPciLock = tc->readMiscRegNoEffect(misc_reg::UintrPciLock);
+    if (uintrPciLock == 1) {
+        return;
+    }
+    assert(uintrPciLock);
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciLock, 0, tc->threadId());
 }
 
 } // namespace gem5

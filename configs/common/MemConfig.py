@@ -33,14 +33,17 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+from common import (
+    HMC,
+    ObjectList,
+)
+
 import m5.objects
-from common import ObjectList
-from common import HMC
 
 
 def create_mem_intf(intf, r, i, intlv_bits, intlv_size, xor_low_bit):
     """
-    Helper function for creating a single memoy controller from the given
+    Helper function for creating a single memory controller from the given
     options.  This function is invoked multiple times in config_mem function
     to create an array of controllers.
     """
@@ -97,6 +100,7 @@ def create_mem_intf(intf, r, i, intlv_bits, intlv_size, xor_low_bit):
 
     # We got all we need to configure the appropriate address
     # range
+    print("start: " +str(r.start)+" end: "+str(r.start+r.size())+", intlvhigh: "+str(intlv_low_bit + intlv_bits - 1)+" intlvbits:"+str(intlv_bits)+" intlvMatch: "+str(i)+" xorHigh: "+str(xor_high_bit))
     interface.range = m5.objects.AddrRange(
         r.start,
         size=r.size(),

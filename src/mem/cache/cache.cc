@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2019 ARM Limited
+ * Copyright (c) 2010-2019, 2024 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -62,6 +62,8 @@
 #include "mem/cache/write_queue_entry.hh"
 #include "mem/request.hh"
 #include "params/Cache.hh"
+
+#include "debug/AdaptiveDdioMlcPrefetcher.hh"
 
 namespace gem5
 {
@@ -159,7 +161,8 @@ Cache::satisfyRequest(PacketPtr pkt, CacheBlk *blk,
 
 bool
 Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
-              PacketList &writebacks)
+              PacketList &writebacks,
+              bool is_ddio)
 {
 
     if (pkt->req->isUncacheable()) {
@@ -183,7 +186,7 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         return false;
     }
 
-    return BaseCache::access(pkt, blk, lat, writebacks);
+    return BaseCache::access(pkt, blk, lat, writebacks, is_ddio);
 }
 
 void
@@ -383,6 +386,16 @@ Cache::handleTimingReqMiss(PacketPtr pkt, CacheBlk *blk, Tick forward_time,
                                                     pkt->req->getFlags(),
                                                     pkt->req->requestorId());
             pf = new Packet(req, pkt->cmd);
+            if (isIOCache) {
+                if (pkt->cmd == MemCmd::WriteReq || pkt->cmd == MemCmd::WriteLineReq) {
+                    pf->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+                    if (pkt->isDdioPkt())
+                        pf->setDdioPkt();
+                    if (pkt->isDdioHeader())
+                        pf->setDdioHeader();
+                }
+            }
+
             pf->allocate();
             assert(pf->matchAddr(pkt));
             assert(pf->getSize() == pkt->getSize());
@@ -440,6 +453,26 @@ Cache::recvTimingReq(PacketPtr pkt)
         // packet is merely used to co-ordinate state transitions
         Packet *snoop_pkt = new Packet(pkt, true, false);
 
+        if (isIOCache && (pkt->cmd == MemCmd::WritebackDirty || pkt->cmd == MemCmd::WriteReq || pkt->cmd == MemCmd::WriteLineReq)) {
+            pkt->setPrefetchHintPkt();
+            if (send_header_only) {
+                if (pkt->isDdioHeader()) {
+                    pkt->setPrefetchHintPkt();
+                    DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::recvTimingReq pkt %s, mlc %d, Header\n", snoop_pkt->print(), snoop_pkt->getDdioPrefetchDestination());
+                } else {
+                    pkt->unsetPrefetchHintPkt();
+                    DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::recvTimingReq pkt %s, mlc %d, not Header\n", snoop_pkt->print(), snoop_pkt->getDdioPrefetchDestination());
+                }
+            }
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::recvTimingReq pkt %s, mlc %d, Send all\n", snoop_pkt->print(), snoop_pkt->getDdioPrefetchDestination());
+        }
+        if (pkt->isPrefetchHintPkt()) {
+            snoop_pkt->setPrefetchHintPkt();
+            snoop_pkt->setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            if (pkt->isDdioHeader())
+                snoop_pkt->setDdioHeader();
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::recvTimingReq pkt %s, mlc %d\n", snoop_pkt->print(), snoop_pkt->getDdioPrefetchDestination());
+        }
         // also reset the bus time that the original packet has
         // not yet paid for
         snoop_pkt->headerDelay = snoop_pkt->payloadDelay = 0;
@@ -534,10 +567,12 @@ Cache::createMissPacket(PacketPtr cpu_pkt, CacheBlk *blk,
         //   it does not fill it will have to writeback the dirty data
         //   immediately which generates uneccesary writebacks).
         bool force_clean_rsp = isReadOnly || clusivity == enums::mostly_excl;
-        cmd = needsWritable ? MemCmd::ReadExReq :
-            (force_clean_rsp ? MemCmd::ReadCleanReq : MemCmd::ReadSharedReq);
+        cmd = (needsWritable || (isIOCache && ddioDisabled)) ? MemCmd::ReadExReq : (force_clean_rsp ? MemCmd::ReadCleanReq : MemCmd::ReadSharedReq);
     }
     PacketPtr pkt = new Packet(cpu_pkt->req, cmd, blkSize);
+    if (isIOCache) {
+        pkt->setBlockIO();
+    }
 
     // if there are upstream caches that have already marked the
     // packet as having sharers (not passing writable), pass that info
@@ -849,7 +884,7 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
                 }
                 // not a cache fill, just forwarding response
                 // responseLatency is the latency of the return path
-                // from lower level cahces/memory to the core.
+                // from lower level caches/memory to the core.
                 completion_time += clockEdge(responseLatency) +
                     pkt->payloadDelay;
                 if (!is_error) {
@@ -948,9 +983,18 @@ Cache::serviceMSHRTargets(MSHR *mshr, const PacketPtr pkt, CacheBlk *blk)
 PacketPtr
 Cache::evictBlock(CacheBlk *blk)
 {
-    PacketPtr pkt = (blk->isSet(CacheBlk::DirtyBit) || writebackClean) ?
-        writebackBlk(blk) : cleanEvictBlk(blk);
 
+    int qid = blk->getDdioPrefetchDestination();
+    bool ddioheader = blk->isDdioHeader();
+
+    PacketPtr pkt = (blk->isSet(CacheBlk::DirtyBit) || writebackClean) ? writebackBlk(blk) : cleanEvictBlk(blk);
+    if (isIOCache) {
+        if (pkt) {
+            pkt->setDdioPrefetchDestination(qid);
+            if (ddioheader)
+                pkt->setDdioHeader();
+        }
+    }
     invalidateBlock(blk);
 
     return pkt;
@@ -975,6 +1019,8 @@ Cache::cleanEvictBlk(CacheBlk *blk)
     pkt->allocate();
     DPRINTF(Cache, "Create CleanEvict %s\n", pkt->print());
 
+    if (isIOCache)
+        pkt->setBlockIO();
     return pkt;
 }
 
@@ -1065,6 +1111,16 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
             // the pointer along in case of static data), in case
             // there is a snoop hit in upper levels
             Packet snoopPkt(pkt, true, true);
+
+            if (pkt->isPrefetchHintPkt()) {
+                snoopPkt.setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+                snoopPkt.setPrefetchHintPkt();
+                if (pkt->isDdioHeader())
+                    snoopPkt.setDdioHeader();
+                // Not run on timingsimple
+                DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::handleSnoop dest %d, pkt\n", snoopPkt.getDdioPrefetchDestination(), snoopPkt.print());
+            }
+
             snoopPkt.setExpressSnoop();
             // the snoop packet does not need to wait any additional
             // time
@@ -1237,7 +1293,7 @@ Cache::handleSnoop(PacketPtr pkt, CacheBlk *blk, bool is_timing,
     // Do this last in case it deallocates block data or something
     // like that
     if (blk_valid && invalidate) {
-        invalidateBlock(blk);
+        invalidateBlock(blk, isLLCisMLCIOInvalid(pkt));
         DPRINTF(Cache, "new state is %s\n", blk->print());
     }
 
@@ -1250,6 +1306,12 @@ Cache::recvTimingSnoopReq(PacketPtr pkt)
 {
     DPRINTF(CacheVerbose, "%s: for %s\n", __func__, pkt->print());
 
+    if (pkt->isPrefetchHintPkt()) {
+        pkt->unsetPrefetchHintPkt();
+        if (pkt->getDdioPrefetchDestination() == mlc_idx)
+            ppDdioHint->notify(pkt);
+        DPRINTF(AdaptiveDdioMlcPrefetcher, "recvTimingSnoopReq! PrefetchHint pkt %s, dest %d, my idx %d\n", pkt->print(), pkt->getDdioPrefetchDestination(), mlc_idx);
+    }
     // no need to snoop requests that are not in range
     if (!inRange(pkt->getAddr())) {
         return;
@@ -1389,6 +1451,16 @@ Cache::isCachedAbove(PacketPtr pkt, bool is_timing)
     if (is_timing) {
         Packet snoop_pkt(pkt, true, false);
         snoop_pkt.setExpressSnoop();
+
+        if (pkt->isPrefetchHintPkt()) {
+            snoop_pkt.setPrefetchHintPkt();
+            snoop_pkt.setDdioPrefetchDestination(pkt->getDdioPrefetchDestination());
+            if (pkt->isDdioHeader())
+                snoop_pkt.setDdioHeader();
+            // Not run timingsimple
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::isCachedAbove dest %d, pkt %s\n", snoop_pkt.getDdioPrefetchDestination(), snoop_pkt.print());
+        }
+
         // Assert that packet is either Writeback or CleanEvict and not a
         // prefetch request because prefetch requests need an MSHR and may
         // generate a snoop response.
@@ -1431,6 +1503,16 @@ Cache::sendMSHRQueuePacket(MSHR* mshr)
         // normal response, hence it needs the MSHR as its sender
         // state
         snoop_pkt.senderState = mshr;
+
+        if (tgt_pkt->isPrefetchHintPkt()) {
+            snoop_pkt.setPrefetchHintPkt();
+            snoop_pkt.setDdioPrefetchDestination(tgt_pkt->getDdioPrefetchDestination());
+            if (tgt_pkt->isDdioHeader())
+                snoop_pkt.setDdioHeader();
+            // Not run timingsimple
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Cache::sendMSHRQueuePacket dest %d, pkt %s\n", snoop_pkt.getDdioPrefetchDestination(), snoop_pkt.print());
+        }
+
         cpuSidePort.sendTimingSnoopReq(&snoop_pkt);
 
         // Check to see if the prefetch was squashed by an upper cache (to

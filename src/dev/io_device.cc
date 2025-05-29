@@ -60,6 +60,7 @@ PioDevice::init()
 {
     if (!pioPort.isConnected())
         panic("Pio port of %s not connected to anything!", name());
+    std::cout << "PIO sending range change!\n";
     pioPort.sendRangeChange();
 }
 

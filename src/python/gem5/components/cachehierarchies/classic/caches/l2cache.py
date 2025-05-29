@@ -24,11 +24,16 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from .....utils.override import *
-
-from m5.objects import Cache, Clusivity, BasePrefetcher, StridePrefetcher
-
 from typing import Type
+
+from m5.objects import (
+    BasePrefetcher,
+    Cache,
+    Clusivity,
+    StridePrefetcher,
+)
+
+from .....utils.override import *
 
 
 class L2Cache(Cache):
@@ -60,3 +65,5 @@ class L2Cache(Cache):
         self.writeback_clean = writeback_clean
         self.clusivity = clusivity
         self.prefetcher = PrefetcherCls()
+        self.ddio_way_part = 4
+        self.is_llc = True

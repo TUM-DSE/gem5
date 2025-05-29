@@ -130,6 +130,10 @@ class Commit
     /** Mark the thread as processing a trap. */
     void processTrapEvent(ThreadID tid);
 
+    void processFlushEvent(ThreadID tid);
+
+    void processFlushEndEvent(ThreadID tid);
+
   public:
     /** Construct a Commit with the given parameters. */
     Commit(CPU *_cpu, const BaseO3CPUParams &params);
@@ -162,6 +166,8 @@ class Commit
      * all stores have written back.
      */
     IEW *iewStage;
+
+    uint64_t committedWhileWaiting = 0;
 
     /** Sets pointer to list of active threads. */
     void setActiveThreads(std::list<ThreadID> *at_ptr);
@@ -215,6 +221,10 @@ class Commit
 
     /** Generates an event to schedule a squash due to a trap. */
     void generateTrapEvent(ThreadID tid, Fault inst_fault);
+
+    void generateFlushEvent(ThreadID tid);
+
+    EventFunctionWrapper *flushEvent;
 
     /** Records that commit needs to initiate a squash due to an
      * external state update through the TC.
@@ -276,10 +286,10 @@ class Commit
     void squashAfter(ThreadID tid, const DynInstPtr &head_inst);
 
     /** Handles processing an interrupt. */
-    void handleInterrupt();
+    bool handleInterrupt();
 
     /** Get fetch redirecting so we can handle an interrupt */
-    void propagateInterrupt();
+    void propagateInterrupt(ThreadID tid);
 
     /** Commits as many instructions as possible. */
     void commitInsts();
@@ -453,7 +463,18 @@ class Commit
         interrupts are enabled and pending the pipeline will squash to avoid
         a possible livelock senario.  */
     bool avoidQuiesceLiveLock;
+    bool avoidInterrupt;
+    Addr lastPCofCommit;
+    bool lastCommitStartedBeforeInterrupt = true;
+    bool userInterruptThisCycle = false;
+    uint8_t allowUserInterrupt = 0;
+    const uint8_t interrruptPerUserInterrupt = 100;
+    bool processingUserInterruptRom = false;
+    bool changeUserInterruptBlock = false;
+    bool userInterruptFlush = false;
 
+    Fault userInterrupt = NoFault;
+    uint16_t userFlushDelay = 0;
     /** Updates commit stats based on this instruction. */
     void updateComInstStats(const DynInstPtr &inst);
 

@@ -31,11 +31,13 @@ Import('*')
 SimObject('Prefetcher.py', sim_objects=[
     'BasePrefetcher', 'MultiPrefetcher', 'QueuedPrefetcher',
     'StridePrefetcherHashedSetAssociative', 'StridePrefetcher',
-    'TaggedPrefetcher', 'IndirectMemoryPrefetcher', 'SignaturePathPrefetcher',
-    'SignaturePathPrefetcherV2', 'AccessMapPatternMatching', 'AMPMPrefetcher',
+    #'SmsPrefetcher', 'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
+    'TaggedPrefetcher', 'IndirectMemoryPrefetcher',
+    'SignaturePathPrefetcher', 'SignaturePathPrefetcherV2',
+    'AccessMapPatternMatching', 'AMPMPrefetcher',
     'DeltaCorrelatingPredictionTables', 'DCPTPrefetcher',
     'IrregularStreamBufferPrefetcher', 'SlimAMPMPrefetcher',
-    'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher'])
+    'BOPPrefetcher', 'SBOOEPrefetcher', 'STeMSPrefetcher', 'PIFPrefetcher', 'MlcPrefetcher'])
 
 Source('access_map_pattern_matching.cc')
 Source('base.cc')
@@ -47,9 +49,13 @@ Source('indirect_memory.cc')
 Source('pif.cc')
 Source('queued.cc')
 Source('sbooe.cc')
+#Source('sms.cc')
 Source('signature_path.cc')
 Source('signature_path_v2.cc')
 Source('slim_ampm.cc')
 Source('spatio_temporal_memory_streaming.cc')
 Source('stride.cc')
 Source('tagged.cc')
+Source('mlc_prefetcher.cc')
+
+DebugFlag('AdaptiveDdioMlcPrefetcher')

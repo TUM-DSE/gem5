@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 ARM Limited
+ * Copyright (c) 2013-2014, 2023 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -52,6 +52,7 @@
 #include "base/compiler.hh"
 #include "base/statistics.hh"
 #include "base/types.hh"
+//#include "mem/cache/cache_probe_arg.hh"
 #include "mem/cache/cache_blk.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
@@ -64,6 +65,8 @@ namespace gem5
 
 class BaseCache;
 struct BasePrefetcherParams;
+//class ProbeManager;
+//class System;
 
 namespace prefetch
 {
@@ -84,6 +87,19 @@ class Base : public ClockedObject
         const bool isFill;
         const bool miss;
     };
+
+    /*using EvictionInfo = CacheDataUpdateProbeArg;
+
+    class PrefetchEvictListener : public ProbeListenerArgBase<EvictionInfo>
+    {
+      public:
+        PrefetchEvictListener(Base &_parent, ProbeManager *pm,
+                              const std::string &name)
+            : ProbeListenerArgBase(pm, name), parent(_parent) {}
+        void notify(const EvictionInfo &info) override;
+      protected:
+        Base &parent;
+    };*/
 
     std::vector<PrefetchListener *> listeners;
 
@@ -262,6 +278,12 @@ class Base : public ClockedObject
 
     // PARAMETERS
 
+    /** Pointer to the parent system. */
+    //System* system;
+
+    /** Pointer to the parent cache's probe manager. */
+    //ProbeManager *probeManager;
+
     /** Pointr to the parent cache. */
     BaseCache* cache;
 
@@ -366,21 +388,31 @@ class Base : public ClockedObject
     /** Registered mmu for address translations */
     BaseMMU * mmu;
 
+    bool ddioPrefetch = false;
+
   public:
     Base(const BasePrefetcherParams &p);
     virtual ~Base() = default;
 
     virtual void setCache(BaseCache *_cache);
 
+    //virtual void
+    //setParentInfo(System *sys, ProbeManager *pm, unsigned blk_size);
+
     /**
      * Notify prefetcher of cache access (may be any access or just
      * misses, depending on cache parameters.)
      */
-    virtual void notify(const PacketPtr &pkt, const PrefetchInfo &pfi) = 0;
+    virtual void
+    notify(const PacketPtr &pkt, const PrefetchInfo &pfi) = 0;
 
     /** Notify prefetcher of cache fill */
     virtual void notifyFill(const PacketPtr &pkt)
     {}
+
+    /** Notify prefetcher of cache eviction */
+    //virtual void notifyEvict(const EvictionInfo &info)
+    //{}
 
     virtual PacketPtr getPacket() = 0;
 

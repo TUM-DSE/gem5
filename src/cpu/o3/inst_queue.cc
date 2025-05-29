@@ -841,7 +841,17 @@ InstructionQueue::scheduleReadyInsts()
                 // cycle if we used one.
                 if (idx >= 0)
                     fuPool->freeUnitNextCycle(idx);
+
+                // CPU has no capable FU for the instruction
+                // but this may be OK if the instruction gets
+                // squashed. Remember this and give IEW
+                // the opportunity to trigger a fault
+                // if the instruction is unsupported.
+                // Otherwise, commit will panic.
+                //if (idx == FUPool::NoCapableFU)
+                //  issuing_inst->setNoCapableFU();
             } else {
+                //assert(idx != FUPool::NoCapableFU);
                 bool pipelined = fuPool->isPipelined(op_class);
                 // Generate completion event for the FU
                 ++wbOutstanding;
@@ -898,6 +908,7 @@ InstructionQueue::scheduleReadyInsts()
             listOrder.erase(order_it++);
             iqStats.statIssuedInstType[tid][op_class]++;
         } else {
+            //assert(idx == FUPool::NoFreeFU);
             iqStats.statFuBusy[op_class]++;
             iqStats.fuBusy[tid]++;
             ++order_it;
@@ -1259,7 +1270,8 @@ InstructionQueue::doSquash(ThreadID tid)
                 }
 
             } else if (!squashed_inst->isStoreConditional() ||
-                       !squashed_inst->isCompleted()) {
+                       !squashed_inst->isCompleted() ||
+                       (squashed_inst->isReadBarrier() || squashed_inst->isWriteBarrier())) {
                 NonSpecMapIt ns_inst_it =
                     nonSpecInsts.find(squashed_inst->seqNum);
 
@@ -1270,6 +1282,12 @@ InstructionQueue::doSquash(ThreadID tid)
                     // loads that became ready but stalled on a
                     // blocked cache are alreayd removed from
                     // nonSpecInsts, and have not faulted
+                    if (!(squashed_inst->getFault() != NoFault ||
+                            squashed_inst->isMemRef())) {
+                        std::cout << squashed_inst->macroop->getName() << std::endl;
+                        std::cout << !squashed_inst->isStoreConditional() << std::endl;
+                        std::cout << !squashed_inst->isCompleted() << std::endl;
+                    }
                     assert(squashed_inst->getFault() != NoFault ||
                            squashed_inst->isMemRef());
                 } else {

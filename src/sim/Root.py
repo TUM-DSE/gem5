@@ -26,13 +26,12 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from m5.SimObject import SimObject
 from m5.params import *
+from m5.SimObject import SimObject
 from m5.util import fatal
 
 
 class Root(SimObject):
-
     _the_instance = None
 
     def __new__(cls, **kwargs):
@@ -76,3 +75,4 @@ class Root(SimObject):
     time_sync_spin_threshold = Param.Clock(
         "100us", "when less than this much time is left, spin"
     )
+    portlinks = VectorParam.EtherLink([], "EtherLink")

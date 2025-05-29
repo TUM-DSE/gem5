@@ -60,6 +60,7 @@ class IGbEInt;
 class IGbE : public EtherDevice
 {
   private:
+    int adq = -1;
     IGbEInt *etherInt;
 
     // device registers
@@ -347,6 +348,7 @@ class IGbE : public EtherDevice
         bool packetDone();
 
         EventFunctionWrapper pktEvent;
+        EventFunctionWrapper pktUintrEvent;
 
         // Event to handle issuing header and data write at the same time
         // and only callking pktComplete() when both are completed

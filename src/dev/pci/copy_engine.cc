@@ -118,7 +118,7 @@ CopyEngine::CopyEngineChannel::~CopyEngineChannel()
 Port &
 CopyEngine::getPort(const std::string &if_name, PortID idx)
 {
-    if (if_name != "dma") {
+    if (if_name != "dma_local") {
         // pass it along to our super class
         return PciDevice::getPort(if_name, idx);
     } else {
@@ -134,6 +134,7 @@ CopyEngine::getPort(const std::string &if_name, PortID idx)
 Port &
 CopyEngine::CopyEngineChannel::getPort()
 {
+    std::cerr << "Here comes the port durururu\n";
     return cePort;
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012,2016-2017, 2019-2020 ARM Limited
+ * Copyright (c) 2011-2012,2016-2017, 2019-2020 Arm Limited
  * All rights reserved
  *
  * The license below extends only to copyright in the software and shall
@@ -50,6 +50,10 @@
 #include "arch/generic/decoder.hh"
 #include "arch/generic/isa.hh"
 #include "arch/generic/tlb.hh"
+#include "arch/x86/pcstate.hh"
+#include "arch/x86/kvm/x86_cpu.hh"
+#include "arch/x86/regs/misc.hh"
+#include "cpu/o3/thread_context.hh"
 #include "base/cprintf.hh"
 #include "base/loader/symtab.hh"
 #include "base/logging.hh"
@@ -191,6 +195,12 @@ BaseCPU::BaseCPU(const Params &p, bool is_checker)
     modelResetPort.onChange([this](const bool &new_val) {
         setReset(new_val);
     });
+
+    //for (int i = 0; i < params().port_cpu_idle_pins_connection_count; i++) {
+    //    cpuIdlePins.emplace_back(new IntSourcePin<BaseCPU>(
+    //        csprintf("%s.cpu_idle_pins[%d]", name(), i), i, this));
+    //}
+
     // create a stat group object for each thread on this core
     fetchStats.reserve(numThreads);
     executeStats.reserve(numThreads);
@@ -234,6 +244,12 @@ BaseCPU::postInterrupt(ThreadID tid, int int_num, int index)
     // Only wake up syscall emulation if it is not waiting on a futex.
     // This is to model the fact that instructions such as ARM SEV
     // should wake up a WFE sleep, but not a futex syscall WAIT.
+    //
+    // For RISC-V, the WFI sleep wake up is implementation defined.
+    // The SiFive WFI wake up the hart only if mip & mie != 0
+    //if ((FullSystem && interrupts[tid]->isWakeUp()) ||
+    //    !system->futexMap.is_waiting(threadContexts[tid]))
+    //    wakeup(tid);
     if (FullSystem || !system->futexMap.is_waiting(threadContexts[tid]))
         wakeup(tid);
 }
@@ -463,6 +479,8 @@ BaseCPU::getPort(const std::string &if_name, PortID idx)
         return getInstPort();
     else if (if_name == "model_reset")
         return modelResetPort;
+    //else if (if_name == "cpu_idle_pins")
+    //    return *cpuIdlePins[idx];
     else
         return ClockedObject::getPort(if_name, idx);
 }
@@ -537,6 +555,11 @@ BaseCPU::activateContext(ThreadID thread_num)
 
     DPRINTF(Thread, "activate contextId %d\n",
             threadContexts[thread_num]->contextId());
+
+    //if (thread_num < cpuIdlePins.size()) {
+    //    cpuIdlePins[thread_num]->lower();
+    //}
+
     // Squash enter power gating event while cpu gets activated
     if (enterPwrGatingEvent.scheduled())
         deschedule(enterPwrGatingEvent);
@@ -551,6 +574,11 @@ BaseCPU::suspendContext(ThreadID thread_num)
 {
     DPRINTF(Thread, "suspend contextId %d\n",
             threadContexts[thread_num]->contextId());
+
+    //if (thread_num < cpuIdlePins.size()) {
+    //    cpuIdlePins[thread_num]->raise();
+    //}
+
     // Check if all threads are suspended
     for (auto t : threadContexts) {
         if (t->status() != ThreadContext::Suspended) {
@@ -624,6 +652,15 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
 
         newTC->takeOverFrom(oldTC);
 
+        if (oldCPU->isKvm) {
+            X86KvmCPU *oldKvm = reinterpret_cast<X86KvmCPU *>(oldCPU);
+            if (oldKvm->jumping_rip) {
+                reinterpret_cast<o3::ThreadContext *>(newTC)->thread->noSquashFromTC = true;
+                newTC->pcState(X86ISA::PCState(oldKvm->jumping_rip + newTC->readMiscReg(X86ISA::misc_reg::CsBase)));
+                reinterpret_cast<o3::ThreadContext *>(newTC)->thread->noSquashFromTC = false;
+            }
+        }
+
         assert(newTC->contextId() == oldTC->contextId());
         assert(newTC->threadId() == oldTC->threadId());
         system->replaceThreadContext(newTC, newTC->contextId());
@@ -676,6 +713,8 @@ BaseCPU::setReset(bool state)
             tc->getIsaPtr()->resetThread();
             // reset the decoder in case it had partially decoded something,
             tc->getDecoderPtr()->reset();
+            // reset MMU,
+            //tc->getMMUPtr()->reset();
             // flush the TLBs,
             tc->getMMUPtr()->flushAll();
             // Clear any interrupts,

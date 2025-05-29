@@ -42,6 +42,7 @@
 #include "debug/PciHost.hh"
 #include "dev/pci/device.hh"
 #include "dev/platform.hh"
+#include "dev/x86/pc.hh"
 #include "params/GenericPciHost.hh"
 #include "params/PciHost.hh"
 
@@ -110,6 +111,14 @@ PciHost::DeviceInterface::postInt()
 }
 
 void
+PciHost::DeviceInterface::postUInt()
+{
+    DPRINTF(PciHost, "postInt\n");
+
+    reinterpret_cast<GenericPciHost *>(&host)->postUInt();
+}
+
+void
 PciHost::DeviceInterface::clearInt()
 {
     DPRINTF(PciHost, "clearInt\n");
@@ -172,6 +181,11 @@ GenericPciHost::write(PacketPtr pkt)
              "%02x:%02x.%i: Write to config space on non-existent PCI device\n",
              dev_addr.first.bus, dev_addr.first.dev, dev_addr.first.func);
 
+    /*if (!pci_dev) {
+        pkt->makeAtomicResponse();
+        return 20000; // 20ns default from PciDevice.py
+    }*/
+
     // @todo Remove this after testing
     pkt->headerDelay = pkt->payloadDelay = 0;
 
@@ -204,6 +218,11 @@ GenericPciHost::postInt(const PciBusAddr &addr, PciIntPin pin)
     platform.postPciInt(mapPciInterrupt(addr, pin));
 }
 
+void
+GenericPciHost::postUInt()
+{
+    reinterpret_cast<Pc *>(&platform)->postPciUInt();
+}
 void
 GenericPciHost::clearInt(const PciBusAddr &addr, PciIntPin pin)
 {

@@ -52,6 +52,8 @@
 #include "sim/full_system.hh"
 #include "sim/process.hh"
 
+#include "sim/pseudo_inst.hh"
+#include "arch/x86/pseudo_inst_abi.hh"
 namespace gem5
 {
 
@@ -125,6 +127,9 @@ void
 InvalidOpcode::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
     if (FullSystem) {
+        auto *xsi = static_cast<X86StaticInst *>(inst.get());
+        fatal("Unrecognized/invalid instruction executed:\n %s, at %d",
+                xsi->machInst, curTick());
         X86Fault::invoke(tc, inst);
     } else {
         auto *xsi = static_cast<X86StaticInst *>(inst.get());
@@ -315,6 +320,149 @@ StartupInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 
     tc->pcState(tc->readMiscReg(misc_reg::CsBase));
 }
+void
+UserInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+{
+    if (!FullSystem) {
+        FaultBase::invoke(tc, inst);
+        return;
+    }
+    // pseudo_inst::m5checkpoint(tc, 0, 0);
+    // tc->getCpuPtr()->serialize(std::cout);
+    PCState pc = tc->pcState().as<PCState>();
+    assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
 
+    DPRINTF(Faults, "RIP %#x: User vector %d: %s\n", pc.pc(), vector, describe());
+    using namespace X86ISAInst::rom_labels;
+    HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
+    MicroPC entry;
+    if (m5reg.mode == LongMode) {
+        if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy == InterruptStrategy::Intelligent) {
+            entry = extern_label_longModeTrackUserInterrupt;
+        } else {
+            entry = extern_label_longModeUserInterrupt;
+        }
+    } else {
+        if (m5reg.submode == RealMode)
+            panic("No");
+        else
+            panic("No");
+    }
+    if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy != InterruptStrategy::Intelligent) {
+        tc->setReg(intRegMicro(1), vector);
+        Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
+        tc->setReg(intRegMicro(7), pc.pc() - cs_base);
+    }
+    if (errorCode != (uint64_t)(-1)) {
+        if (m5reg.mode == LongMode) {
+            entry = extern_label_longModeUserInterruptWithError;
+        } else {
+            panic("Legacy mode interrupts with error codes "
+                    "aren't implemented.");
+        }
+        tc->setReg(intRegMicro(15), errorCode);
+    }
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    tc->pcState(pc);
+}
+void
+UserTimer::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+{
+    if (!FullSystem) {
+        FaultBase::invoke(tc, inst);
+        return;
+    }
+    // pseudo_inst::m5checkpoint(tc, 0, 0);
+    // tc->getCpuPtr()->serialize(std::cout);
+    PCState pc = tc->pcState().as<PCState>();
+    assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
+
+    DPRINTF(Faults, "RIP %#x: User timer %d: %s\n", pc.pc(), vector, describe());
+    using namespace X86ISAInst::rom_labels;
+    HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
+    MicroPC entry;
+    if (m5reg.mode == LongMode) {
+        if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy == InterruptStrategy::Intelligent) {
+            entry = extern_label_longModeTrackUserTimer;
+        } else {
+            entry = extern_label_longModeUserTimer;
+        }
+    } else {
+        if (m5reg.submode == RealMode)
+            panic("No");
+        else
+            panic("No");
+    }
+    if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy != InterruptStrategy::Intelligent) {
+        tc->setReg(intRegMicro(1), vector);
+        Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
+        tc->setReg(intRegMicro(7), pc.pc() - cs_base);
+    }
+    if (errorCode != (uint64_t)(-1)) {
+        if (m5reg.mode == LongMode) {
+            entry = extern_label_longModeUserTimerWithError;
+        } else {
+            panic("Legacy mode interrupts with error codes "
+                    "aren't implemented.");
+        }
+        tc->setReg(intRegMicro(15), errorCode);
+    }
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    tc->pcState(pc);
+}
+void
+UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+{
+    if (!FullSystem) {
+        FaultBase::invoke(tc, inst);
+        return;
+    }
+    // pseudo_inst::m5checkpoint(tc, 0, 0);
+    // tc->getCpuPtr()->serialize(std::cout);
+    PCState pc = tc->pcState().as<PCState>();
+    assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
+
+    DPRINTF(Faults, "RIP %#x: User Pci %d: %s\n", pc.pc(), vector, describe());
+    using namespace X86ISAInst::rom_labels;
+    HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
+    MicroPC entry;
+    if (m5reg.mode == LongMode) {
+        if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy == InterruptStrategy::Intelligent) {
+            entry = extern_label_longModeTrackUserPci;
+        } else {
+            entry = extern_label_longModeUserPci;
+        }
+    } else {
+        if (m5reg.submode == RealMode)
+            panic("No");
+        else
+            panic("No");
+    }
+    if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy != InterruptStrategy::Intelligent) {
+        tc->setReg(intRegMicro(1), vector);
+        Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
+        tc->setReg(intRegMicro(7), pc.pc() - cs_base);
+    }
+    if (errorCode != (uint64_t)(-1)) {
+        if (m5reg.mode == LongMode) {
+            entry = extern_label_longModeUserTimerWithError;
+        } else {
+            panic("Legacy mode interrupts with error codes "
+                    "aren't implemented.");
+        }
+        tc->setReg(intRegMicro(15), errorCode);
+    }
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    tc->pcState(pc);
+}
 } // namespace X86ISA
 } // namespace gem5

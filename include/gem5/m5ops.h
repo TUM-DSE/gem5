@@ -74,7 +74,8 @@ void m5_work_end(uint64_t workid, uint64_t threadid);
  * the workload itself (is this SE mode? which OS is running?).
  */
 void m5_workload();
-
+void m5_utimer(uint64_t tick_delay);
+void m5_utimer_end();
 /*
  * Create _addr and _semi versions all declarations, e.g. m5_exit_addr and
  * m5_exit_semi. These expose the the memory and semihosting variants of the

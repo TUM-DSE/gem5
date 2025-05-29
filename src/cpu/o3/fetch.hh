@@ -43,6 +43,7 @@
 
 #include "arch/generic/decoder.hh"
 #include "arch/generic/mmu.hh"
+//#include "base/random.hh"
 #include "base/statistics.hh"
 #include "cpu/o3/comm.hh"
 #include "cpu/o3/dyn_inst_ptr.hh"
@@ -56,6 +57,7 @@
 #include "mem/port.hh"
 #include "sim/eventq.hh"
 #include "sim/probe/probe.hh"
+#include "cpu/o3/userinterrupt.hh"
 
 namespace gem5
 {
@@ -200,6 +202,8 @@ class Fetch
     /** To probe when a fetch request is successfully sent. */
     ProbePointArg<RequestPtr> *ppFetchRequestSent;
 
+    //Random::RandomPtr rng = Random::genRandom();
+
   public:
     /** Fetch constructor. */
     Fetch(CPU *_cpu, const BaseO3CPUParams &params);
@@ -304,9 +308,16 @@ class Fetch
      */
     bool checkInterrupt(Addr pc) { return interruptPending; }
 
+    void wastedUserInterrupt(ThreadID tid, Addr pc);
+
     /** Squashes a specific thread and resets the PC. */
     void doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
             ThreadID tid);
+
+    void updatePCWithoutSquash(const PCStateBase &new_pc, ThreadID tid);
+
+    void doSquashInterrupt(const PCStateBase &new_pc,
+                           const DynInstPtr squashInst, ThreadID tid);
 
     /** Squashes a specific thread and resets the PC. Also tells the CPU to
      * remove any instructions between fetch and decode
@@ -331,6 +342,8 @@ class Fetch
     void squash(const PCStateBase &new_pc, const InstSeqNum seq_num,
                 DynInstPtr squashInst, ThreadID tid);
 
+    void squashInterrupt(const PCStateBase &new_pc, const InstSeqNum seq_num,
+                         DynInstPtr squashInst, ThreadID tid);
     /** Ticks the fetch stage, processing all inputs signals and fetching
      * as many instructions as possible.
      */
@@ -358,6 +371,8 @@ class Fetch
     InstDecoder *decoder[MaxThreads];
 
     RequestPort &getInstPort() { return icachePort; }
+
+    uint64_t fetchedWhileWaiting = 0;
 
   private:
     DynInstPtr buildInst(ThreadID tid, StaticInstPtr staticInst,
@@ -526,6 +541,8 @@ class Fetch
 
     /** Event used to delay fault generation of translation faults */
     FinishTranslationEvent finishTranslationEvent;
+
+    UserInterruptProcessor userInterruptProcessor;
 
   protected:
     struct FetchStatGroup : public statistics::Group

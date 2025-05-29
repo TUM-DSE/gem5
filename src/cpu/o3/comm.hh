@@ -206,13 +206,17 @@ struct TimeStruct
         bool branchTaken; // *F
         /// If an interrupt is pending and fetch should stall
         bool interruptPending; // *F
-        /// If the interrupt ended up being cleared before being handled
+        /// If the interrupt ended up being cleared before being handled @Berk this description does not seem to align with actual usage.
         bool clearInterrupt; // *F
+        // If there is an update to pc that avoids squashing from commit
+        bool noneSquashPCUpdate; // *F
+        ///
+        bool clearUserInterrupt; // *F
 
         /// Hack for now to send back an strictly ordered access to
         /// the IEW stage.
         bool strictlyOrdered; // *I
-
+        
     };
 
     CommitComm commitInfo[MaxThreads];

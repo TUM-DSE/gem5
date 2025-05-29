@@ -50,6 +50,7 @@ namespace X86ISA
         Bitfield<19> destMode;
         Bitfield<20> level;
         Bitfield<21> trigger;
+        Bitfield<22> user;
     EndBitUnion(TriggerIntMessage)
 
     namespace delivery_mode

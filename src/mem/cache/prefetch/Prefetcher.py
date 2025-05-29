@@ -1,4 +1,4 @@
-# Copyright (c) 2012, 2014, 2019 ARM Limited
+# Copyright (c) 2012, 2014, 2019, 2022-2024 Arm Limited
 # All rights reserved.
 #
 # The license below extends only to copyright in the software and shall
@@ -36,13 +36,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from m5.SimObject import *
-from m5.params import *
-from m5.proxy import *
-
 from m5.objects.ClockedObject import ClockedObject
 from m5.objects.IndexingPolicies import *
 from m5.objects.ReplacementPolicies import *
+#from m5.objects.Tags import *
+from m5.params import *
+from m5.proxy import *
+from m5.SimObject import *
 
 
 class HWPProbeEvent(object):
@@ -90,6 +90,7 @@ class BasePrefetcher(ClockedObject):
         "4KiB", "Size of pages for virtual addresses"
     )
 
+    is_ddio_prefetcher = Param.Bool(False, "Notify prefetcher on ddioHint")
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._events = []
@@ -191,7 +192,21 @@ class StridePrefetcher(QueuedPrefetcher):
 
     use_requestor_id = Param.Bool(True, "Use requestor id based history")
 
+    #use_cache_line_address = Param.Bool(
+    #    True,
+    #    "If this parameter is set to True, then the prefetcher will "
+    #    "operate on cache line addresses, else it would operate on word "
+    #    "addresses",
+    #)
+
     degree = Param.Int(4, "Number of prefetches to generate")
+    #distance = Param.Unsigned(
+    #    0,
+    #    "How far ahead of the demand stream to start prefetching. "
+    #    "Skip this number of strides ahead of the first identified prefetch, "
+    #    "then generate `degree` prefetches at `stride` intervals. "
+    #    "A value of zero indicates no skip.",
+    #)
 
     table_assoc = Param.Int(4, "Associativity of the PC table")
     table_entries = Param.MemorySize("64", "Number of entries of the PC table")
@@ -574,6 +589,32 @@ class BOPPrefetcher(QueuedPrefetcher):
                 queue",
     )
 
+    # BOP is a degree one prefetcher
+    #degree = Param.Int(1, "Number of prefetches to generate")
+
+    #queue_squash = True
+    #queue_filter = True
+    #cache_snoop = True
+    #prefetch_on_pf_hit = True
+    #on_miss = True
+    #on_inst = False
+
+
+#class SmsPrefetcher(QueuedPrefetcher):
+#    # Paper: https://web.eecs.umich.edu/~twenisch/papers/isca06.pdf
+#    type = "SmsPrefetcher"
+#    cxx_class = "gem5::prefetch::Sms"
+#    cxx_header = "mem/cache/prefetch/sms.hh"
+#    ft_size = Param.Unsigned(64, "Size of Filter and Active generation table")
+#    pht_size = Param.Unsigned(16384, "Size of pattern history table")
+#    region_size = Param.Unsigned(4096, "Spatial region size")
+
+#    queue_squash = True
+#    queue_filter = True
+#    cache_snoop = True
+#    prefetch_on_access = True
+#    on_inst = False
+
 
 class SBOOEPrefetcher(QueuedPrefetcher):
     type = "SBOOEPrefetcher"
@@ -687,3 +728,10 @@ class PIFPrefetcher(QueuedPrefetcher):
         self.addEvent(
             HWPProbeEventRetiredInsts(self, simObj, "RetiredInstsPC")
         )
+
+class MlcPrefetcher(QueuedPrefetcher):
+    type = 'MlcPrefetcher'
+    #abstract = True
+    cxx_class = 'gem5::prefetch::MlcPrefetcher'
+    cxx_header = "mem/cache/prefetch/mlc_prefetcher.hh"
+    is_ddio_prefetcher = True

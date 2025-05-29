@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 ARM Limited
+ * Copyright (c) 2013-2014, 2022-2024 Arm Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -52,6 +52,8 @@
 #include "params/BasePrefetcher.hh"
 #include "sim/system.hh"
 
+#include "debug/AdaptiveDdioMlcPrefetcher.hh"
+
 namespace gem5
 {
 
@@ -92,9 +94,17 @@ Base::PrefetchListener::notify(const PacketPtr &pkt)
     }
 }
 
+/*void
+Base::PrefetchEvictListener::notify(const EvictionInfo &info)
+{
+    if (info.newData.empty())
+        parent.notifyEvict(info);
+}*/
+
 Base::Base(const BasePrefetcherParams &p)
-    : ClockedObject(p), listeners(), cache(nullptr), blkSize(p.block_size),
-      lBlkSize(floorLog2(blkSize)), onMiss(p.on_miss), onRead(p.on_read),
+    : ClockedObject(p), listeners(), cache(nullptr),
+      blkSize(p.block_size), lBlkSize(floorLog2(blkSize)),
+      onMiss(p.on_miss), onRead(p.on_read),
       onWrite(p.on_write), onData(p.on_data), onInst(p.on_inst),
       requestorId(p.sys->getRequestorId(this)),
       pageBytes(p.page_bytes),
@@ -102,7 +112,8 @@ Base::Base(const BasePrefetcherParams &p)
       prefetchOnPfHit(p.prefetch_on_pf_hit),
       useVirtualAddresses(p.use_virtual_addresses),
       prefetchStats(this), issuedPrefetches(0),
-      usefulPrefetches(0), mmu(nullptr)
+      usefulPrefetches(0), mmu(nullptr),
+      ddioPrefetch(p.is_ddio_prefetcher)
 {
 }
 
@@ -116,6 +127,17 @@ Base::setCache(BaseCache *_cache)
     blkSize = cache->getBlockSize();
     lBlkSize = floorLog2(blkSize);
 }
+
+/*void
+Base::setParentInfo(System *sys, ProbeManager *pm, unsigned blk_size)
+{
+    assert(!system && !probeManager);
+    system = sys;
+    probeManager = pm;
+    // If the cache has a different block size from the system's, save it
+    blkSize = blk_size;
+    lBlkSize = floorLog2(blkSize);
+}*/
 
 Base::StatGroup::StatGroup(statistics::Group *parent)
   : statistics::Group(parent),
@@ -165,6 +187,7 @@ Base::observeAccess(const PacketPtr &pkt, bool miss) const
 
     if (!miss) {
         if (prefetchOnPfHit)
+            //return prefetched;
             return hasBeenPrefetched(pkt->getAddr(), pkt->isSecure());
         if (!prefetchOnAccess)
             return false;
@@ -241,15 +264,24 @@ Base::pageIthBlockAddress(Addr page, uint32_t blockIndex) const
 void
 Base::probeNotify(const PacketPtr &pkt, bool miss)
 {
+    //const PacketPtr pkt = acc.pkt;
+    //const CacheAccessor &cache = acc.cache;
+
     // Don't notify prefetcher on SWPrefetch, cache maintenance
     // operations or for writes that we are coaslescing.
     if (pkt->cmd.isSWPrefetch()) return;
     if (pkt->req->isCacheMaintenance()) return;
+    //if (pkt->isCleanEviction()) return;
+    //if (pkt->isWrite() && cache.coalesce()) return;
     if (pkt->isWrite() && cache != nullptr && cache->coalesce()) return;
     if (!pkt->req->hasPaddr()) {
         panic("Request must have a physical address");
     }
 
+    //bool has_been_prefetched =
+    //    acc.cache.hasBeenPrefetched(pkt->getAddr(), pkt->isSecure(),
+    //                                requestorId);
+    //if (has_been_prefetched) {
     if (hasBeenPrefetched(pkt->getAddr(), pkt->isSecure())) {
         usefulPrefetches += 1;
         prefetchStats.pfUseful++;
@@ -281,12 +313,26 @@ Base::regProbeListeners()
      */
     if (listeners.empty() && cache != nullptr) {
         ProbeManager *pm(cache->getProbeManager());
-        listeners.push_back(new PrefetchListener(*this, pm, "Miss", false,
-                                                true));
-        listeners.push_back(new PrefetchListener(*this, pm, "Fill", true,
-                                                 false));
-        listeners.push_back(new PrefetchListener(*this, pm, "Hit", false,
-                                                 false));
+        if (ddioPrefetch) {
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Listen DdioHint\n");
+            listeners.push_back(new PrefetchListener(*this, pm, "DdioHint"));
+        } else {
+            DPRINTF(AdaptiveDdioMlcPrefetcher, "Listen Miss Fill Hit\n");
+            listeners.push_back(new PrefetchListener(*this, pm, "Miss", false,
+                                                        true));
+            listeners.push_back(new PrefetchListener(*this, pm, "Fill", true,
+                                                        false));
+            if (prefetchOnAccess) {
+                listeners.push_back(new PrefetchListener(*this, pm, "Hit", false,
+                                                            false));
+            }
+        }
+        // listeners.push_back(new PrefetchListener(*this, pm, "Miss", false,
+        //                                          true));
+        // listeners.push_back(new PrefetchListener(*this, pm, "Fill", true,
+        //                                          false));
+        // listeners.push_back(new PrefetchListener(*this, pm, "Hit", false,
+        //                                          false));
     }
 }
 

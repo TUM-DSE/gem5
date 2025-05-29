@@ -140,6 +140,13 @@ class DynInst : public ExecContext, public RefCounted
     /** InstRecord that tracks this instructions. */
     trace::InstRecord *traceData = nullptr;
 
+    inline void commitCallback()
+    {
+        if (staticInst->commitCallbackExists) {
+            staticInst->_commitCallback();
+        }
+    }
+
   protected:
     enum Status
     {
@@ -187,6 +194,8 @@ class DynInst : public ExecContext, public RefCounted
         ReqMade,
         MemOpDone,
         HtmFromTransaction,
+        //NoCapableFU,           /// Processor does not have capability to
+                               /// execute the instruction
         MaxFlags
     };
 
@@ -456,6 +465,7 @@ class DynInst : public ExecContext, public RefCounted
     void dumpSNList();
 #endif
 
+    bool fetchedBeforeInterrupt = true;
     /** Renames a destination register to a physical register.  Also records
      *  the previous physical register that the logical register mapped to.
      */
@@ -575,6 +585,9 @@ class DynInst : public ExecContext, public RefCounted
     bool isUnverifiable() const { return staticInst->isUnverifiable(); }
     bool isSyscall() const { return staticInst->isSyscall(); }
     bool isMacroop() const { return staticInst->isMacroop(); }
+    bool isSenduipi() const { return staticInst->isSenduipi(); }
+    bool isUiret() const { return staticInst->isUiret(); }
+    bool isUintUcode() const { return staticInst->isUintUcode(); }
     bool isMicroop() const { return staticInst->isMicroop(); }
     bool isDelayedCommit() const { return staticInst->isDelayedCommit(); }
     bool isLastMicroop() const { return staticInst->isLastMicroop(); }

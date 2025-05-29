@@ -66,6 +66,7 @@ breakpoint()
 #ifndef NDEBUG
     kill(getpid(), SIGTRAP);
 #else
+    kill(getpid(), SIGTRAP);
     cprintf("debug::breakpoint suppressed, compiled with NDEBUG\n");
 #endif
 }

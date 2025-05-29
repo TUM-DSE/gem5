@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018 ARM Limited
+ * Copyright (c) 2012-2018, 2023-2024 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -49,6 +49,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iosfwd>
+//#include <limits>
 #include <list>
 #include <string>
 
@@ -150,9 +151,32 @@ class CacheBlk : public TaggedEntry
     /** List of thread contexts that have performed a load-locked (LL)
      * on the block since the last store. */
     std::list<Lock> lockList;
+    int ddio_prefetch_id = -1;
+
+    // SHIN. For MLC/LLC/Mem DDIO
+    int ddio_prefetch_destination = -1;
+    bool is_ddio_pkt = false;
+    bool is_ddio_header = false;
+
+    // SHIN. For MLC Prefetch
+    bool is_prefetch_hint_pkt = false;
+    bool is_block_io;
 
   public:
-    CacheBlk()
+    void setDdioPrefetchId(int ddio_id) { ddio_prefetch_id = ddio_id; }
+    void setDdioPrefetchDestination(int ddio_dest) { ddio_prefetch_destination = ddio_dest; }
+    void setDdioHeader() { is_ddio_header = true; }
+    void setPrefetchHintPkt() { is_prefetch_hint_pkt = true; }
+    void unsetPrefetchHintPkt() { is_prefetch_hint_pkt = false; }
+    void setDdioPkt() { is_ddio_pkt = true; }
+
+    int getDdioPrefetchId() { return ddio_prefetch_id; }
+    int getDdioPrefetchDestination() { return ddio_prefetch_destination; }
+    bool isDdioPkt() { return is_ddio_pkt; }
+    bool isDdioHeader() { return is_ddio_header; }
+    bool isPrefetchHintPkt() { return is_prefetch_hint_pkt; }
+    bool isBlockIO() { return is_block_io; }
+    CacheBlk()// : TaggedEntry()
     {
         invalidate();
     }
@@ -183,6 +207,7 @@ class CacheBlk : public TaggedEntry
         }
         setCoherenceBits(other.coherence);
         setTaskId(other.getTaskId());
+        //setPartitionId(other.getPartitionId());
         setWhenReady(curTick());
         setRefCount(other.getRefCount());
         setSrcRequestorId(other.getSrcRequestorId());
@@ -205,6 +230,7 @@ class CacheBlk : public TaggedEntry
         clearCoherenceBits(AllBits);
 
         setTaskId(context_switch_task_id::Unknown);
+        //setPartitionId(std::numeric_limits<uint64_t>::max());
         setWhenReady(MaxTick);
         setRefCount(0);
         setSrcRequestorId(Request::invldRequestorId);
@@ -286,6 +312,9 @@ class CacheBlk : public TaggedEntry
 
     /** Get the requestor id associated to this block. */
     uint32_t getSrcRequestorId() const { return _srcRequestorId; }
+
+    /** Getter for _partitionId */
+    //uint64_t getPartitionId() const { return _partitionId; }
 
     /** Get the number of references to this block since insertion. */
     unsigned getRefCount() const { return _refCount; }
@@ -466,6 +495,10 @@ class CacheBlk : public TaggedEntry
     /** Set the source requestor id. */
     void setSrcRequestorId(const uint32_t id) { _srcRequestorId = id; }
 
+    /** Setter for _partitionId */
+    //void
+    //setPartitionId(const uint64_t partitionId) { _partitionId = partitionId; }
+
     /** Set the number of references to this block since insertion. */
     void setRefCount(const unsigned count) { _refCount = count; }
 
@@ -478,6 +511,10 @@ class CacheBlk : public TaggedEntry
 
     /** holds the source requestor ID for this block. */
     int _srcRequestorId = 0;
+
+    /** Partition ID of the activity that allocated this block */
+    /* This ID is used to enforce resource partitioning policies */
+    //uint64_t _partitionId;
 
     /** Number of references to this block since it was brought in. */
     unsigned _refCount = 0;
@@ -513,8 +550,10 @@ class TempCacheBlk final : public CacheBlk
     TempCacheBlk(unsigned size) : CacheBlk()
     {
         data = new uint8_t[size];
+        //registerTagExtractor(ext);
     }
     TempCacheBlk(const TempCacheBlk&) = delete;
+    //using CacheBlk::operator=;
     TempCacheBlk& operator=(const TempCacheBlk&) = delete;
     ~TempCacheBlk() { delete [] data; };
 
@@ -526,6 +565,13 @@ class TempCacheBlk final : public CacheBlk
 
         _addr = MaxAddr;
     }
+
+    /*void
+    insert(const KeyType &tag) override
+    {
+        CacheBlk::insert(tag);
+        _addr = tag.address;
+    }*/
 
     void
     insert(const Addr addr, const bool is_secure) override

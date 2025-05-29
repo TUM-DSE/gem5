@@ -47,6 +47,8 @@
 #include "debug/SnoopFilter.hh"
 #include "sim/system.hh"
 
+#include "debug/IdioMlcPrefetcherSnoopFilter.hh"
+
 namespace gem5
 {
 
@@ -70,6 +72,10 @@ SnoopFilter::lookupRequest(const Packet* cpkt, const ResponsePort&
     DPRINTF(SnoopFilter, "%s: src %s packet %s\n", __func__,
             cpu_side_port.name(), cpkt->print());
 
+    if (cpkt->isPrefetchHintPktConst())
+        DPRINTF(IdioMlcPrefetcherSnoopFilter,
+                "SnoopFilter::lookupRequest. PrefetchHint. pkt %s\n",
+                cpkt->print());
     // check if the packet came from a cache
     bool allocate = !cpkt->req->isUncacheable() && cpu_side_port.isSnooping()
         && cpkt->fromCache();
@@ -94,6 +100,22 @@ SnoopFilter::lookupRequest(const Packet* cpkt, const ResponsePort&
     }
     SnoopItem& sf_item = reqLookupResult.it->second;
     SnoopMask interested = sf_item.holder | sf_item.requested;
+    SnoopMask destMask = 0;
+    if (cpkt->isPrefetchHintPktConst() && isForL3X) {
+        //&& cpkt->getDdioPrefetchDestinationConst() > -1
+        int dest = cpkt->getDdioPrefetchDestinationConst();
+        if (dest > -1) {
+            std::bitset<256> a = {1};
+            destMask = a << dest;
+            DPRINTF(IdioMlcPrefetcherSnoopFilter,
+                    "SnoopFilter::lookupRequest. Pass snoopFilter. pkt %s, dest %d, mask %s, interested %s\n",
+                    cpkt->print(), dest, destMask.to_string(), interested.to_string());
+
+            interested |= destMask;
+            // req_port &= ~destMask;
+        }
+        // return snoopSelected(maskToPortList(destMask), lookupLatency);
+    }
 
     // Store unmodified value of snoop filter item in temp storage in
     // case we need to revert because of a send retry in
@@ -113,7 +135,7 @@ SnoopFilter::lookupRequest(const Packet* cpkt, const ResponsePort&
 
     // If we are not allocating, we are done
     if (!allocate)
-        return snoopSelected(maskToPortList(interested & ~req_port),
+        return snoopSelected(maskToPortList((interested & ~req_port) | destMask),
                              lookupLatency);
 
     if (cpkt->needsResponse()) {
@@ -141,9 +163,10 @@ SnoopFilter::lookupRequest(const Packet* cpkt, const ResponsePort&
     } else { // if (!cpkt->needsResponse())
         assert(cpkt->isEviction());
         // make sure that the sender actually had the line
-        panic_if((sf_item.holder & req_port).none(), "requestor %x is not a " \
-                 "holder :( SF value %x.%x\n", req_port,
-                 sf_item.requested, sf_item.holder);
+        panic_if(((sf_item.holder & req_port).none() && !cpkt->isBlockIO()), "requester %x is not a "
+                                                                                "holder :( SF value %x.%x\n",
+                    req_port,
+                    sf_item.requested, sf_item.holder);
         // CleanEvicts and Writebacks -> the sender and all caches above
         // it may not have the line anymore.
         if (!cpkt->isBlockCached()) {
@@ -153,7 +176,7 @@ SnoopFilter::lookupRequest(const Packet* cpkt, const ResponsePort&
         }
     }
 
-    return snoopSelected(maskToPortList(interested & ~req_port), lookupLatency);
+    return snoopSelected(maskToPortList((interested & ~req_port) | destMask), lookupLatency);
 }
 
 void
@@ -194,9 +217,14 @@ SnoopFilter::lookupSnoop(const Packet* cpkt)
     auto sf_it = cachedLocations.find(line_addr);
     bool is_hit = (sf_it != cachedLocations.end());
 
-    panic_if(!is_hit && (cachedLocations.size() >= maxEntryCount),
-             "snoop filter exceeded capacity of %d cache blocks\n",
-             maxEntryCount);
+    if (!is_hit && (cachedLocations.size() >= maxEntryCount)) {
+        DPRINTF(IdioMlcPrefetcherSnoopFilter,
+                "snoop filter exceeded capacity of %d cache blocks, pkt %s, ddio %d\n",
+                maxEntryCount, cpkt->print(), cpkt->isPrefetchHintPktConst());
+        panic_if(!is_hit && (cachedLocations.size() >= maxEntryCount),
+                    "snoop filter exceeded capacity of %d cache blocks\n",
+                    maxEntryCount);
+    }
 
     // If the snoop filter has no entry, simply return a NULL
     // portlist, there is no point creating an entry only to remove it

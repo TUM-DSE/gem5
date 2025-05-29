@@ -63,6 +63,7 @@
 #include "cpu/o3/rob.hh"
 #include "cpu/o3/scoreboard.hh"
 #include "cpu/o3/thread_state.hh"
+#include "cpu/o3/hacktimer.hh"
 #include "cpu/activity.hh"
 #include "cpu/base.hh"
 #include "cpu/simple_thread.hh"
@@ -84,7 +85,8 @@ namespace o3
 {
 
 class ThreadContext;
-
+class CPU;
+extern CPU *cpu_to_find;
 /**
  * O3CPU class, has each of the stages (fetch through commit)
  * within it, as well as all of the time buffers between stages.  The
@@ -113,10 +115,17 @@ class CPU : public BaseCPU
     /** Overall CPU status. */
     Status _status;
 
-  private:
+    bool waitingForRecv;
+    Tick sendTick;
+    Tick startTick = 0;
+    Tick totalGap = 0;
+    uint64_t times = 0;
 
+  private:
     /** The tick event used for scheduling CPU ticks. */
     EventFunctionWrapper tickEvent;
+
+    EventFunctionWrapper timerEvent;
 
     /** The exit event used for terminating all ready-to-exit threads */
     EventFunctionWrapper threadExitEvent;
@@ -138,7 +147,6 @@ class CPU : public BaseCPU
         if (tickEvent.scheduled())
             tickEvent.squash();
     }
-
     /**
      * Check if the pipeline has drained and signal drain done.
      *
@@ -182,9 +190,12 @@ class CPU : public BaseCPU
         mmu->demapPage(vaddr, asn);
     }
 
+    void timer();
+    void timer_check();
     /** Ticks CPU, calling tick() on each stage, and checking the overall
      *  activity to see if the CPU should deschedule itself.
      */
+
     void tick();
 
     /** Initialize the CPU */
@@ -289,6 +300,8 @@ class CPU : public BaseCPU
     /** Processes any an interrupt fault. */
     void processInterrupts(const Fault &interrupt);
 
+    void userInterruptInfoUpdate(const Fault &interrupt);
+
     /** Halts the CPU. */
     void halt() { panic("Halt not implemented!\n"); }
 
@@ -370,6 +383,12 @@ class CPU : public BaseCPU
 
     /** Debug function to print all instructions on the list. */
     void dumpInsts();
+
+    void sendUipiRegister(Tick sendTick);
+
+    void sendUipiSent();
+
+    void discardInterrupt();
 
   public:
 #ifndef NDEBUG
@@ -544,6 +563,19 @@ class CPU : public BaseCPU
     /** Available thread ids in the cpu*/
     std::vector<ThreadID> tids;
 
+    bool inHandler = false;
+    bool inHandlerPre = false;
+    bool inHandlerPost = false;
+    bool inDelivery = false;
+    bool cycleIn = false;
+    bool userIntAtLeastOnce = false;
+
+    HackTimer hackTimer;
+
+    InterruptStrategy intStrategy;
+
+    void calculateTicks();
+
     /** CPU pushRequest function, forwards request to LSQ. */
     Fault
     pushRequest(const DynInstPtr& inst, bool isLoad, uint8_t *data,
@@ -581,6 +613,37 @@ class CPU : public BaseCPU
         /** Stat for total number of cycles the CPU spends descheduled due to a
          * quiesce operation or waiting for an interrupt. */
         statistics::Scalar quiesceCycles;
+
+        statistics::Scalar wastedCycles;
+
+        statistics::Formula avgWastedCycles;
+
+        statistics::Scalar flushedInsts;
+
+        statistics::Formula avgFlushedInsts;
+
+        statistics::Distribution endToEndSendUipiLatency; // done
+
+        statistics::Scalar numUserInterruptsIssued; // done
+
+        statistics::Scalar numUserInterruptsDelivered; // done
+
+        statistics::Formula numUserInterrupts; // done
+
+        statistics::Scalar numUserInterruptUop; // done
+
+        statistics::Formula avgUserInterruptUop; // done
+
+        statistics::Formula ipc;
+
+        statistics::Scalar numInsts;
+
+        statistics::Scalar numCycles;
+
+        statistics::Formula numROICycles;
+        statistics::Scalar startROICycle;
+        statistics::Scalar endROICycle;
+
     } cpuStats;
 
   public:

@@ -59,7 +59,7 @@ using namespace igbreg;
 using namespace networking;
 
 IGbE::IGbE(const Params &p)
-    : EtherDevice(p), etherInt(NULL),
+    : EtherDevice(p), adq(p.adq_idx), etherInt(NULL),
       rxFifo(p.rx_fifo_size), txFifo(p.tx_fifo_size), inTick(false),
       rxTick(false), txTick(false), txFifoTick(false), rxDmaPacket(false),
       pktOffset(0), fetchDelay(p.fetch_delay), wbDelay(p.wb_delay),
@@ -339,6 +339,9 @@ IGbE::read(PacketPtr pkt)
         break;
       case REG_SWFWSYNC:
         pkt->setLE<uint32_t>(regs.sw_fw_sync);
+        break;
+      case REG_IMS:
+        pkt->setLE<uint32_t>(regs.imr);
         break;
       default:
         if (!IN_RANGE(daddr, REG_VFTA, VLAN_FILTER_TABLE_SIZE * 4) &&
@@ -736,6 +739,10 @@ void
 IGbE::cpuPostInt()
 {
 
+    PciCommandRegister command = letoh(PciDevice::config.command);
+    // if interrupt masking bit is set
+    if (command.interruptDisable)
+        return;
     etherDeviceStats.postedInterrupts++;
 
     if (!(regs.icr() & regs.imr)) {
@@ -921,9 +928,12 @@ IGbE::DescCache<T>::writeback1()
 
 
     assert(wbOut);
-    igbe->dmaWrite(pciToDma(descBase() + descHead() * sizeof(T)),
-                   wbOut * sizeof(T), &wbEvent, (uint8_t *)wbBuf,
-                   igbe->wbCompDelay);
+    // igbe->dmaWrite(pciToDma(descBase() + descHead() * sizeof(T)),
+    //    wbOut * sizeof(T), &wbEvent, (uint8_t *)wbBuf,
+    //    igbe->wbCompDelay);
+    igbe->IdioWrite(pciToDma(descBase() + descHead() * sizeof(T)),
+                    wbOut * sizeof(T), &wbEvent, (uint8_t *)wbBuf,
+                    igbe->wbCompDelay, 0, igbe->adq);
 }
 
 template<class T>
@@ -1148,6 +1158,7 @@ IGbE::DescCache<T>::unserialize(CheckpointIn &cp)
 IGbE::RxDescCache::RxDescCache(IGbE *i, const std::string n, int s)
     : DescCache<RxDesc>(i, n, s), pktDone(false), splitCount(0),
     pktEvent([this]{ pktComplete(); }, n),
+    pktUintrEvent([this]{ igbe->uintrPost(); }, n),
     pktHdrEvent([this]{ pktSplitDone(); }, n),
     pktDataEvent([this]{ pktSplitDone(); }, n)
 
@@ -1187,6 +1198,8 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
     pktDone = false;
     unsigned buf_len, hdr_len;
 
+    //INTERRUPT HERE
+    igbe->schedule(pktUintrEvent, curTick() + igbe->rxWriteDelay);
     RxDesc *desc = unusedCache.front();
     switch (igbe->regs.srrctl.desctype()) {
       case RXDT_LEGACY:
@@ -1207,9 +1220,12 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
         DPRINTF(EthernetDesc, "Packet Length: %d srrctl: %#x Desc Size: %d\n",
                 packet->length, igbe->regs.srrctl(), buf_len);
         assert(packet->length < buf_len);
-        igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
-                       packet->length, &pktEvent, packet->data,
-                       igbe->rxWriteDelay);
+        // igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
+        //    packet->length, &pktEvent, packet->data,
+        //    igbe->rxWriteDelay);
+        igbe->IdioWrite(pciToDma(desc->adv_read.pkt),
+                        packet->length, &pktEvent, packet->data,
+                        igbe->rxWriteDelay, 0, igbe->adq);
         desc->adv_wb.header_len = htole(0);
         desc->adv_wb.sph = htole(0);
         desc->adv_wb.pkt_len = htole((uint16_t)(pktPtr->length));
@@ -1233,9 +1249,12 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
             bytesCopied = packet->length;
             assert(pkt_offset == 0);
             DPRINTF(EthernetDesc, "Hdr split: Entire packet in header\n");
-            igbe->dmaWrite(pciToDma(desc->adv_read.hdr),
-                           packet->length, &pktEvent, packet->data,
-                           igbe->rxWriteDelay);
+            // igbe->dmaWrite(pciToDma(desc->adv_read.hdr),
+            //    packet->length, &pktEvent, packet->data,
+            //    igbe->rxWriteDelay);
+            igbe->IdioWrite(pciToDma(desc->adv_read.hdr),
+                            packet->length, &pktEvent, packet->data,
+                            igbe->rxWriteDelay, 0, igbe->adq);
             desc->adv_wb.header_len = htole((uint16_t)packet->length);
             desc->adv_wb.sph = htole(0);
             desc->adv_wb.pkt_len = htole(0);
@@ -1248,9 +1267,13 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
                 bytesCopied += max_to_copy;
                 DPRINTF(EthernetDesc,
                         "Hdr split: Continuing data buffer copy\n");
-                igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
-                               max_to_copy, &pktEvent,
-                               packet->data + pkt_offset, igbe->rxWriteDelay);
+                // igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
+                //    max_to_copy, &pktEvent,
+                //    packet->data + pkt_offset, igbe->rxWriteDelay);
+                igbe->IdioWrite(pciToDma(desc->adv_read.pkt),
+                                max_to_copy, &pktEvent,
+                                packet->data + pkt_offset, igbe->rxWriteDelay,
+                                0, igbe->adq);
                 desc->adv_wb.header_len = htole(0);
                 desc->adv_wb.pkt_len = htole((uint16_t)max_to_copy);
                 desc->adv_wb.sph = htole(0);
@@ -1261,12 +1284,20 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
 
                 DPRINTF(EthernetDesc, "Hdr split: splitting at %d\n",
                         split_point);
-                igbe->dmaWrite(pciToDma(desc->adv_read.hdr),
-                               split_point, &pktHdrEvent,
-                               packet->data, igbe->rxWriteDelay);
-                igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
-                               max_to_copy, &pktDataEvent,
-                               packet->data + split_point, igbe->rxWriteDelay);
+                // igbe->dmaWrite(pciToDma(desc->adv_read.hdr),
+                //    split_point, &pktHdrEvent,
+                //    packet->data, igbe->rxWriteDelay);
+                // igbe->dmaWrite(pciToDma(desc->adv_read.pkt),
+                //    max_to_copy, &pktDataEvent,
+                //    packet->data + split_point, igbe->rxWriteDelay);
+                igbe->IdioWrite(pciToDma(desc->adv_read.hdr),
+                                split_point, &pktHdrEvent,
+                                packet->data, igbe->rxWriteDelay,
+                                0, igbe->adq);
+                igbe->IdioWrite(pciToDma(desc->adv_read.pkt),
+                                max_to_copy, &pktDataEvent,
+                                packet->data + split_point, igbe->rxWriteDelay,
+                                0, igbe->adq);
                 desc->adv_wb.header_len = htole(split_point);
                 desc->adv_wb.sph = 1;
                 desc->adv_wb.pkt_len = htole((uint16_t)(max_to_copy));
@@ -1468,7 +1499,7 @@ IGbE::RxDescCache::packetDone()
 bool
 IGbE::RxDescCache::hasOutstandingEvents()
 {
-    return pktEvent.scheduled() || wbEvent.scheduled() ||
+    return pktEvent.scheduled() || pktUintrEvent.scheduled() || wbEvent.scheduled() ||
         fetchEvent.scheduled() || pktHdrEvent.scheduled() ||
         pktDataEvent.scheduled();
 
@@ -1909,8 +1940,10 @@ IGbE::TxDescCache::actionAfterWb()
         DPRINTF(EthernetDesc,
                 "Completion writing back value: %d to addr: %#x\n", descEnd,
                 completionAddress);
-        igbe->dmaWrite(pciToDma(mbits(completionAddress, 63, 2)),
-                       sizeof(descEnd), &nullEvent, (uint8_t *)&descEnd, 0);
+        // igbe->dmaWrite(pciToDma(mbits(completionAddress, 63, 2)),
+        //    sizeof(descEnd), &nullEvent, (uint8_t *)&descEnd, 0);
+        igbe->IdioWrite(pciToDma(mbits(completionAddress, 63, 2)),
+                        sizeof(descEnd), &nullEvent, (uint8_t *)&descEnd, 0, 0, igbe->adq);
     }
 }
 
@@ -2205,7 +2238,12 @@ IGbE::rxStateMachine()
         if (descLeft * ratio <= regs.rdlen()) {
             DPRINTF(Ethernet, "RXS: Interrupting (RXDMT) "
                     "because of descriptors left\n");
-            postInterrupt(IT_RXDMT);
+            //postInterrupt(IT_RXDMT);
+            rxDescCache.writeback(0);
+        }
+
+        if (descLeft < 32) {
+            rxDescCache.writeback(0);
         }
 
         if (rxFifo.empty())

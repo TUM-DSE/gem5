@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, 2015-2016, 2018-2019 ARM Limited
+ * Copyright (c) 2012-2013, 2015-2016, 2018-2019, 2023-2024 Arm Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -59,6 +59,7 @@
 #include "debug/CachePort.hh"
 #include "enums/Clusivity.hh"
 #include "mem/cache/cache_blk.hh"
+//#include "mem/cache/cache_probe_arg.hh"
 #include "mem/cache/compressors/base.hh"
 #include "mem/cache/mshr_queue.hh"
 #include "mem/cache/tags/base.hh"
@@ -83,6 +84,10 @@ namespace prefetch
 {
     class Base;
 }
+/*namespace partitioning_policy
+{
+    class PartitionManager;
+}*/
 class MSHR;
 class RequestPort;
 class QueueEntry;
@@ -102,6 +107,10 @@ class BaseCache : public ClockedObject
         MSHRQueue_MSHRs,
         MSHRQueue_WriteBuffer
     };
+    int mlc_idx;
+    bool isMLC;
+    bool isIOCache;
+    bool send_header_only;
 
   public:
     /**
@@ -332,9 +341,34 @@ class BaseCache : public ClockedObject
     };
 
     CpuSidePort cpuSidePort;
+    std::vector<CpuSidePort *> ddioHintPort;
     MemSidePort memSidePort;
 
   protected:
+
+    /*struct CacheAccessorImpl : CacheAccessor
+    {
+        BaseCache &cache;
+
+        CacheAccessorImpl(BaseCache &_cache) :cache(_cache) {}
+
+        bool inCache(Addr addr, bool is_secure) const override
+        { return cache.inCache(addr, is_secure); }
+
+        bool hasBeenPrefetched(Addr addr, bool is_secure) const override
+        { return cache.hasBeenPrefetched(addr, is_secure); }
+
+        bool hasBeenPrefetched(Addr addr, bool is_secure,
+                               RequestorID requestor) const override
+        { return cache.hasBeenPrefetched(addr, is_secure, requestor); }
+
+        bool inMissQueue(Addr addr, bool is_secure) const override
+        { return cache.inMissQueue(addr, is_secure); }
+
+        bool coalesce() const override
+        { return cache.coalesce(); }
+
+    } accessor;*/
 
     /** Miss status registers */
     MSHRQueue mshrQueue;
@@ -348,6 +382,9 @@ class BaseCache : public ClockedObject
     /** Compression method being used. */
     compression::Base* compressor;
 
+    /** Partitioning manager */
+    //partitioning_policy::PartitionManager* partitionManager;
+
     /** Prefetcher */
     prefetch::Base *prefetcher;
 
@@ -360,6 +397,7 @@ class BaseCache : public ClockedObject
     /** To probe when a cache fill occurs */
     ProbePointArg<PacketPtr> *ppFill;
 
+    ProbePointArg<PacketPtr> *ppDdioHint;
     /**
      * To probe when the contents of a block are updated. Content updates
      * include data fills, overwrites, and invalidations, which means that
@@ -485,7 +523,7 @@ class BaseCache : public ClockedObject
      * @return Boolean indicating whether the request was satisfied.
      */
     virtual bool access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
-                        PacketList &writebacks);
+                        PacketList &writebacks, bool is_ddio = false);
 
     /*
      * Handle a timing request that hit in the cache
@@ -781,7 +819,7 @@ class BaseCache : public ClockedObject
      * @return Pointer to the new cache block.
      */
     CacheBlk *handleFill(PacketPtr pkt, CacheBlk *blk,
-                         PacketList &writebacks, bool allocate);
+                         PacketList &writebacks, bool allocate, bool is_ddio = false);
 
     /**
      * Allocate a new block and perform any necessary writebacks
@@ -795,7 +833,7 @@ class BaseCache : public ClockedObject
      * @param writebacks A list of writeback packets for the evicted blocks
      * @return the allocated block
      */
-    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks);
+    CacheBlk *allocateBlock(const PacketPtr pkt, PacketList &writebacks, bool is_ddio = false);
     /**
      * Evict a cache block.
      *
@@ -821,7 +859,7 @@ class BaseCache : public ClockedObject
      *
      * @param blk Block to invalidate
      */
-    void invalidateBlock(CacheBlk *blk);
+    void invalidateBlock(CacheBlk *blk, bool is_llc_inv = false);
 
     /**
      * Create a writeback request for the given block.
@@ -1285,6 +1323,13 @@ class BaseCache : public ClockedObject
         }
     }
 
+    /*bool hasBeenPrefetched(Addr addr, bool is_secure,
+                           RequestorID requestor) const {
+        CacheBlk *block = tags->findBlock(addr, is_secure);
+        return block && block->wasPrefetched() &&
+               (block->getSrcRequestorId() == requestor);
+    }*/
+
     bool inMissQueue(Addr addr, bool is_secure) const {
         return mshrQueue.findMatch(addr, is_secure);
     }
@@ -1354,6 +1399,24 @@ class BaseCache : public ClockedObject
      */
     void serialize(CheckpointOut &cp) const override;
     void unserialize(CheckpointIn &cp) override;
+
+    bool isLLCIOInvalid(PacketPtr pkt)
+    {
+        return isLLC && pkt->isBlockIO() && pkt->cmd == MemCmd::InvalidateReq;
+    }
+
+    bool isLLCisMLCIOInvalid(PacketPtr pkt)
+    {
+
+        return ((isMLC && mlc_ddio) || isLLC) && pkt->isBlockIO() && pkt->cmd == MemCmd::InvalidateReq;
+    }
+
+    // SHIN.
+    bool ddioEnabled;
+    bool ddioDisabled;
+    int32_t ddioWayPart;
+    bool isLLC;
+    bool mlc_ddio;
 };
 
 /**

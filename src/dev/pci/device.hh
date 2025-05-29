@@ -362,6 +362,7 @@ class PciDevice : public DmaDevice
     }
 
     void intrPost() { hostInterface.postInt(); }
+    void uintrPost() { hostInterface.postUInt(); }
     void intrClear() { hostInterface.clearInt(); }
 
     uint8_t interruptLine() const { return letoh(config.interruptLine); }

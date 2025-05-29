@@ -217,6 +217,8 @@ class X86KvmCPU : public BaseKvmCPU
     void updateKvmStateFPUXSave();
     /** Update MSR registers */
     void updateKvmStateMSRs();
+    /** Update XCR registers */
+    //void updateKvmStateXCRs();
     /** @} */
 
     /**
@@ -236,7 +238,12 @@ class X86KvmCPU : public BaseKvmCPU
     void updateThreadContextXSave(const struct kvm_xsave &kxsave);
     /** Update MSR registers */
     void updateThreadContextMSRs();
+    /** Update XCR registers */
+    //void updateThreadContextXCRs();
     /** @} */
+
+    /** Setup MCE */
+    void setupMce();
 
     /** Transfer gem5's CPUID values into the virtual CPU. */
     void updateCPUID();
@@ -266,6 +273,9 @@ class X86KvmCPU : public BaseKvmCPU
     bool useXSave;
     /** Kvm::capXCRs() available? */
     bool haveXCRs;
+
+  public:
+    uint64_t jumping_rip = 0;
     /** @} */
 };
 

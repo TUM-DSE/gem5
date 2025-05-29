@@ -71,12 +71,15 @@ BaseKvmCPU::BaseKvmCPU(const BaseKvmCPUParams &params)
       alwaysSyncTC(params.alwaysSyncTC),
       threadContextDirty(true),
       kvmStateDirty(false),
+      //usePerf(params.usePerf),
       vcpuID(-1), vcpuFD(-1), vcpuMMapSize(0),
       _kvmRun(NULL), mmioRing(NULL),
       pageSize(sysconf(_SC_PAGE_SIZE)),
       tickEvent([this]{ tick(); }, "BaseKvmCPU tick",
                 false, Event::CPU_Tick_Pri),
       activeInstPeriod(0),
+      //hwCycles(nullptr),
+      //hwInstructions(nullptr),
       perfControlledByTimer(params.usePerfOverflow),
       hostFactor(params.hostFactor), stats(this),
       ctrInsts(0)
@@ -96,6 +99,22 @@ BaseKvmCPU::BaseKvmCPU(const BaseKvmCPUParams &params)
     thread->setStatus(ThreadContext::Halted);
     tc = thread->getTC();
     threadContexts.push_back(tc);
+
+    /*if ((!usePerf) && perfControlledByTimer) {
+        panic("KVM: invalid combination of parameters: cannot use "
+              "perfControlledByTimer without usePerf\n");
+    }
+
+    // If we use perf, we create new PerfKVMCounters
+    if (usePerf) {
+        hwCycles = std::unique_ptr<PerfKvmCounter>(new PerfKvmCounter());
+        hwInstructions = std::unique_ptr<PerfKvmCounter>(new PerfKvmCounter());
+    } else {
+        inform("Using KVM CPU without perf. The stats related to the number "
+               "of cycles and instructions executed by the KVM CPU will not "
+               "be updated. The stats should not be used for performance "
+               "evaluation.");
+    }*/
 }
 
 BaseKvmCPU::~BaseKvmCPU()
@@ -424,6 +443,11 @@ BaseKvmCPU::notifyFork()
         vcpuFD = -1;
         _kvmRun = NULL;
 
+        /*if (usePerf) {
+            hwInstructions->detach();
+            hwCycles->detach();
+        }*/
+
         hwInstructions.detach();
         hwCycles.detach();
     }
@@ -690,6 +714,9 @@ BaseKvmCPU::kvmRunDrain()
 uint64_t
 BaseKvmCPU::getHostCycles() const
 {
+    /*if (usePerf)
+        return hwCycles->read();
+    return 0;*/
     return hwCycles.read();
 }
 
@@ -747,18 +774,27 @@ BaseKvmCPU::kvmRun(Tick ticks)
         // state update might affect guest cycle counters.
         uint64_t baseCycles(getHostCycles());
         uint64_t baseInstrs(hwInstructions.read());
+        /*if (usePerf) {
+            baseInstrs = hwInstructions->read();
+        }*/
 
         // Arm the run timer and start the cycle timer if it isn't
         // controlled by the overflow timer. Starting/stopping the cycle
         // timer automatically starts the other perf timers as they are in
         // the same counter group.
         runTimer->arm(ticks);
+        /*if (usePerf && (!perfControlledByTimer)) {
+            hwCycles->start();
+        }*/
         if (!perfControlledByTimer)
             hwCycles.start();
 
         ioctlRun();
 
         runTimer->disarm();
+        /*if (usePerf && (!perfControlledByTimer)) {
+            hwCycles->stop();
+        }*/
         if (!perfControlledByTimer)
             hwCycles.stop();
 
@@ -772,6 +808,10 @@ BaseKvmCPU::kvmRun(Tick ticks)
         const uint64_t hostCyclesExecuted(getHostCycles() - baseCycles);
         const uint64_t simCyclesExecuted(hostCyclesExecuted * hostFactor);
         const uint64_t instsExecuted(hwInstructions.read() - baseInstrs);
+        /*uint64_t instsExecuted = 0;
+        if (usePerf) {
+            instsExecuted = hwInstructions->read() - baseInstrs;
+        }*/
         ticksExecuted = runTimer->ticksFromHostCycles(hostCyclesExecuted);
 
         /* Update statistics */
@@ -802,7 +842,9 @@ BaseKvmCPU::kvmNonMaskableInterrupt()
 void
 BaseKvmCPU::kvmInterrupt(const struct kvm_interrupt &interrupt)
 {
+    static int numInterrupts = 0;
     ++stats.numInterrupts;
+    ++numInterrupts;
     if (ioctl(KVM_INTERRUPT, (void *)&interrupt) == -1)
         panic("KVM: Failed to deliver interrupt to virtual CPU\n");
 }
@@ -1288,11 +1330,18 @@ BaseKvmCPU::setupCounters()
 
     // We might be re-attaching counters due threads being
     // re-initialised after fork.
+    /*if (usePerf) {
+        if (hwCycles->attached()) {
+            hwCycles->detach();
+        }
+
+        hwCycles->attach(cfgCycles, 0); // TID (0 => currentThread)
+        setupInstCounter();
+    }*/
     if (hwCycles.attached())
         hwCycles.detach();
 
-    hwCycles.attach(cfgCycles,
-                    0); // TID (0 => currentThread)
+    hwCycles.attach(cfgCycles, 0); // TID (0 => currentThread)
 
     setupInstCounter();
 }
@@ -1344,8 +1393,16 @@ BaseKvmCPU::setupInstStop()
 void
 BaseKvmCPU::setupInstCounter(uint64_t period)
 {
+    // This function is for setting up instruction counter using perf
+    //if (!usePerf) {
+    //    return;
+    //}
+
     // No need to do anything if we aren't attaching for the first
     // time or the period isn't changing.
+    //if (period == activeInstPeriod && hwInstructions.attached()) {
+    //    return;
+    //}
     if (period == activeInstPeriod && hwInstructions.attached())
         return;
 

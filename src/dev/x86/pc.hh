@@ -43,6 +43,7 @@ namespace gem5
 
 class SouthBridge;
 
+extern Tick *timer_tix;
 class Pc : public Platform
 {
   public:
@@ -63,6 +64,7 @@ class Pc : public Platform
     void clearConsoleInt() override;
 
     void postPciInt(int line) override;
+    void postPciUInt();
     void clearPciInt(int line) override;
 };
 

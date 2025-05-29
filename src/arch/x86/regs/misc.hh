@@ -228,6 +228,7 @@ enum : RegIndex
     Mc5Status,
     Mc6Status,
     Mc7Status,
+    Mc8Status,
     McStatusEnd,
 
     McAddrBase = McStatusEnd,
@@ -239,6 +240,7 @@ enum : RegIndex
     Mc5Addr,
     Mc6Addr,
     Mc7Addr,
+    Mc8Addr,
     McAddrEnd,
 
     McMiscBase = McAddrEnd,
@@ -250,10 +252,36 @@ enum : RegIndex
     Mc5Misc,
     Mc6Misc,
     Mc7Misc,
+    Mc8Misc,
     McMiscEnd,
 
+    UintrRR = McMiscEnd,
+    UintrHandler,
+    UintrStackAdjust,
+    UintrMisc,
+    UintrPD,
+    UintrTT,
+    UintrPC,
+    UintrOngoing,
+    UintrPCNotConsumed,
+    UintrVec,
+    UintrTimerStatus,
+    UintrPciPC,
+    UintrPciRFLAGS,
+    UintrPciRSP,
+    UintrPciPending,
+    UintrPciON,
+    UintrPciLock,
+    UintrPciConsumed,
+    UintrPciDisable,
+    UintrPciEarlyExit,
+    UintrEnd,
+
+    /*MsrVal(0x985, misc_reg::UintrRR),
+    @TODO  rdval t1, ctrlRegIdx("misc_reg::Mxcsr")  */
     // Extended feature enable register
-    Efer = McMiscEnd,
+    //Efer = McMiscEnd,
+    Efer = UintrEnd,
 
     Star,
     Lstar,
@@ -317,6 +345,7 @@ enum : RegIndex
     Ms,
     Tr,
     Idtr,
+    UIdtr,
 
     // Hidden segment base field
     SegBaseBase = SegSelBase + segment_idx::NumIdxs,
@@ -333,6 +362,7 @@ enum : RegIndex
     MsBase,
     TrBase,
     IdtrBase,
+    UIdtrBase,
 
     // The effective segment base, ie what is actually added to an
     // address. In 64 bit mode this can be different from the above,
@@ -351,6 +381,7 @@ enum : RegIndex
     MsEffBase,
     TrEffBase,
     IdtrEffBase,
+    UIdtrEffBase,
 
     // Hidden segment limit field
     SegLimitBase = SegEffBaseBase + segment_idx::NumIdxs,
@@ -367,6 +398,7 @@ enum : RegIndex
     MsLimit,
     TrLimit,
     IdtrLimit,
+    UIdtrLimit,
 
     // Hidden segment limit attributes
     SegAttrBase = SegLimitBase + segment_idx::NumIdxs,
@@ -383,6 +415,7 @@ enum : RegIndex
     MsAttr,
     TrAttr,
     IdtrAttr,
+    UIdtrAttr,
 
     // Floating point control registers
     X87Top = SegAttrBase + segment_idx::NumIdxs,
@@ -405,6 +438,9 @@ enum : RegIndex
     // "Fake" MSRs for internally implemented devices
     PciConfigAddress,
 
+    //XcrBase,
+    //Xcr0 = XcrBase,
+
     NumRegs
 };
 
@@ -423,6 +459,13 @@ cr(int index)
     assert(index >= 0 && index < NumCRegs);
     return CrBase + index;
 }
+
+//static inline RegIndex
+//xcr(int index)
+//{
+//    assert(index >= 0 && index < NumXCRegs);
+//    return XcrBase + index;
+//}
 
 static inline RegIndex
 dr(int index)
@@ -541,6 +584,8 @@ segAttr(int index)
 inline constexpr RegClass miscRegClass(MiscRegClass, MiscRegClassName,
         misc_reg::NumRegs, debug::MiscRegs);
 
+typedef int64_t UintrPciPending_t;
+
 /**
  * A type to describe the condition code bits of the RFLAGS register,
  * plus two flags, EZF and ECF, which are only visible to microcode.
@@ -648,6 +693,24 @@ EndBitUnion(CR4)
 BitUnion64(CR8)
     Bitfield<3, 0> tpr; // Task Priority Register
 EndBitUnion(CR8)
+
+/*BitUnion64(XCR0)
+    Bitfield<0> x87; // x87 FPU/MMX support (must be 1)
+    Bitfield<1> sse; // XSAVE support for MXCSR and XMM registers
+    Bitfield<2> avx; // AVX enabled and XSAVE support for upper halves of YMM
+                     // registers
+    Bitfield<3> bndreg; // MPX enabled and XSAVE support for BND0-BND3
+                        // registers
+    Bitfield<4> bndsrc; // MPX enabled and XSAVE support for BNDCFGU and
+                        // BNDSTATUS registers
+    Bitfield<5> opmask; // AVX-512 enabled and XSAVE support for opmask
+                        // registers k0-k7
+    Bitfield<6> zmm_hi256; // AVX-512 enabled and XSAVE support for upper
+                           // halves of lower ZMM registers
+    Bitfield<7> hi16_zmm; // AVX-512 enabled and XSAVE support for upper ZMM
+                          // registers
+    Bitfield<9> pkru; // XSAVE support for PKRU register
+EndBitUnion(XCR0)*/
 
 BitUnion64(DR6)
     Bitfield<0> b0;
@@ -783,6 +846,58 @@ BitUnion64(McCtl)
     }*/
 EndBitUnion(McCtl)
 
+BitUnion64(UintrRR)
+EndBitUnion(UintrRR)
+BitUnion64(UintrHandler)
+EndBitUnion(UintrHandler)
+BitUnion64(UintrStackAdjust)
+EndBitUnion(UintrStackAdjust)
+BitUnion64(UintrMisc)
+    Bitfield<31, 0> uittsz;
+    Bitfield<39, 32> uinv;
+    Bitfield<62, 40> reserved;
+    Bitfield<63> uif;
+EndBitUnion(UintrMisc)
+BitUnion64(UintrPD)
+EndBitUnion(UintrPD)
+BitUnion64(UintrTT)
+    Bitfield<0> senduipi_enabled;
+    Bitfield<3, 1> reserved;
+    Bitfield<63, 4> uittaddr;
+EndBitUnion(UintrTT)
+BitUnion64(UintrPC)
+EndBitUnion(UintrPC)
+BitUnion64(UintrOngoing)
+EndBitUnion(UintrOngoing)
+BitUnion64(UintrPCNotConsumed)
+EndBitUnion(UintrPCNotConsumed)
+BitUnion64(UintrVec)
+EndBitUnion(UintrVec)
+BitUnion64(UintrTimerStatus)
+    Bitfield<0> timer_on;
+    Bitfield<1> timer_should_reset;
+    Bitfield<2> timer_active;
+    Bitfield<10, 3> uinv;
+    Bitfield<63, 10> reserved;
+EndBitUnion(UintrTimerStatus)
+BitUnion64(UintrPciPC)
+EndBitUnion(UintrPciPC)
+BitUnion64(UintrPciRFLAGS)
+EndBitUnion(UintrPciRFLAGS)
+BitUnion64(UintrPciRSP)
+EndBitUnion(UintrPciRSP)
+BitUnion64(UintrPciPending)
+EndBitUnion(UintrPciPending)
+BitUnion64(UintrPciON)
+EndBitUnion(UintrPciON)
+BitUnion64(UintrPciLock)
+EndBitUnion(UintrPciLock)
+BitUnion64(UintrPciConsumed)
+EndBitUnion(UintrPciConsumed)
+BitUnion64(UintrPciDisable)
+EndBitUnion(UintrPciDisable)
+BitUnion64(UintrPciEarlyExit)
+EndBitUnion(UintrPciEarlyExit)
 // Extended feature enable register
 BitUnion64(Efer)
     Bitfield<0> sce; // System call extensions

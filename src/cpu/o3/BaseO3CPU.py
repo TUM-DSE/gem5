@@ -37,14 +37,13 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 from m5.defines import buildEnv
-from m5.params import *
-from m5.proxy import *
-
 from m5.objects.BaseCPU import BaseCPU
-from m5.objects.FUPool import *
 
 # from m5.objects.O3Checker import O3Checker
 from m5.objects.BranchPredictor import *
+from m5.objects.FUPool import *
+from m5.params import *
+from m5.proxy import *
 
 
 class SMTFetchPolicy(ScopedEnum):
@@ -57,6 +56,10 @@ class SMTQueuePolicy(ScopedEnum):
 
 class CommitPolicy(ScopedEnum):
     vals = ["RoundRobin", "OldestReady"]
+
+
+class InterruptStrategy(ScopedEnum):
+    vals = ["Drain", "Flush", "Intelligent", "Apic", "None"]
 
 
 class BaseO3CPU(BaseCPU):
@@ -128,7 +131,7 @@ class BaseO3CPU(BaseCPU):
     renameToROBDelay = Param.Cycles(1, "Rename to reorder buffer delay")
     commitWidth = Param.Unsigned(8, "Commit width")
     squashWidth = Param.Unsigned(8, "Squash width")
-    trapLatency = Param.Cycles(13, "Trap latency")
+    trapLatency = Param.Cycles(0, "Trap latency") #13 -> 0
     fetchTrapLatency = Param.Cycles(1, "Fetch trap latency")
 
     backComSize = Param.Unsigned(
@@ -192,3 +195,6 @@ class BaseO3CPU(BaseCPU):
         TournamentBP(numThreads=Parent.numThreads), "Branch Predictor"
     )
     needsTSO = Param.Bool(False, "Enable TSO Memory model")
+    intStrategy = Param.InterruptStrategy(
+        "None", "Interrupt Cleanup Strategy"
+    )

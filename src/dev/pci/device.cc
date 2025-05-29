@@ -302,6 +302,7 @@ PciDevice::writeConfig(PacketPtr pkt)
     }
 
     switch (pkt->getSize()) {
+      uint8_t low_command_bits;
       case sizeof(uint8_t):
         switch (offset) {
           case PCI0_INTERRUPT_LINE:
@@ -312,6 +313,10 @@ PciDevice::writeConfig(PacketPtr pkt)
             break;
           case PCI_LATENCY_TIMER:
             config.latencyTimer = pkt->getLE<uint8_t>();
+            break;
+          case 0x5:
+            low_command_bits = config.command & 0xFF;
+            config.command = (pkt->getLE<uint8_t>() << 8) | low_command_bits;
             break;
           /* Do nothing for these read-only registers */
           case PCI0_INTERRUPT_PIN:
@@ -331,12 +336,12 @@ PciDevice::writeConfig(PacketPtr pkt)
       case sizeof(uint16_t):
         switch (offset) {
           case PCI_COMMAND:
-            config.command = pkt->getLE<uint8_t>();
+            config.command = pkt->getLE<uint16_t>();
             // IO or memory space may have been enabled/disabled.
             pioPort.sendRangeChange();
             break;
           case PCI_STATUS:
-            config.status = pkt->getLE<uint8_t>();
+            config.status = pkt->getLE<uint16_t>();
             break;
           case PCI_CACHE_LINE_SIZE:
             config.cacheLineSize = pkt->getLE<uint8_t>();

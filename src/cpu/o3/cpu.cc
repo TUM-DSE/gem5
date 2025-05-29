@@ -60,6 +60,11 @@
 #include "sim/process.hh"
 #include "sim/stat_control.hh"
 #include "sim/system.hh"
+#include "cpu.hh"
+#include "arch/x86/interrupts.hh"
+#include "arch/x86/regs/apic.hh"
+#include "arch/x86/regs/msr.hh"
+#include "dev/net/load_generator.hh"
 
 namespace gem5
 {
@@ -68,12 +73,15 @@ struct BaseCPUParams;
 
 namespace o3
 {
-
+CPU *cpu_to_find;
 CPU::CPU(const BaseO3CPUParams &params)
     : BaseCPU(params),
       mmu(params.mmu),
+      waitingForRecv(false),
       tickEvent([this]{ tick(); }, "O3CPU tick",
                 false, Event::CPU_Tick_Pri),
+      timerEvent([this]{ timer(); }, "O3CPU User Timer",
+                false, Event::Default_Pri),
       threadExitEvent([this]{ exitThreads(); }, "O3CPU exit threads",
                 false, Event::CPU_Exit_Pri),
 #ifndef NDEBUG
@@ -114,6 +122,8 @@ CPU::CPU(const BaseO3CPUParams &params)
       globalSeqNum(1),
       system(params.system),
       lastRunningCycle(curCycle()),
+      hackTimer(this),
+      intStrategy(params.intStrategy),
       cpuStats(this)
 {
     fatal_if(FullSystem && params.numThreads > 1,
@@ -122,7 +132,9 @@ CPU::CPU(const BaseO3CPUParams &params)
     fatal_if(!FullSystem && params.numThreads < params.workload.size(),
             "More workload items (%d) than threads (%d) on CPU %s.",
             params.workload.size(), params.numThreads, name());
-
+    if (_cpuId == 0) {
+        cpu_to_find = this;
+    }
     if (!params.switched_out) {
         _status = Running;
     } else {
@@ -328,7 +340,40 @@ CPU::CPUStats::CPUStats(CPU *cpu)
                "to idling"),
       ADD_STAT(quiesceCycles, statistics::units::Cycle::get(),
                "Total number of cycles that CPU has spent quiesced or waiting "
-               "for an interrupt")
+               "for an interrupt"),
+      ADD_STAT(wastedCycles, statistics::units::Cycle::get(),
+               "Total number of cycles wasted in User Interrupt handling"),
+      ADD_STAT(avgWastedCycles, statistics::units::Rate<statistics::units::Cycle, statistics::units::Count>::get(),
+               "Avg number of cycles wasted per delivered User Interrupt"),
+      ADD_STAT(flushedInsts, statistics::units::Cycle::get(),
+               "Total number of instructions flushed for User Interrupt handling"),
+      ADD_STAT(avgFlushedInsts, statistics::units::Rate<statistics::units::Cycle, statistics::units::Count>::get(),
+               "Avg number of instructions flushed per delivered User Interrupt"),
+      ADD_STAT(endToEndSendUipiLatency,
+               "Distribution of number of cycles spent from issue of interrupt to beginning of handler"),
+      ADD_STAT(numUserInterruptsIssued, statistics::units::Count::get(),
+               "Number of user interrupts issued"),
+      ADD_STAT(numUserInterruptsDelivered, statistics::units::Count::get(),
+               "Number of user interrupts delivered"),
+
+      ADD_STAT(numUserInterrupts,
+               "Number of user interrupts delivered or issued"),
+      ADD_STAT(numUserInterruptUop, statistics::units::Count::get(),
+               "Number of uops in user interrupts"),
+      ADD_STAT(avgUserInterruptUop, statistics::units::Rate<statistics::units::Count, statistics::units::Count>::get(),
+               "Avg number of uops in user interrupts"),
+      ADD_STAT(ipc, statistics::units::Rate<statistics::units::Count, statistics::units::Cycle>::get(),
+               "IPC: instructions per cycle in ROI"),
+      ADD_STAT(numCycles, statistics::units::Cycle::get(),
+               "Number of cpu cycles simulated in ROI"),
+      ADD_STAT(numInsts, statistics::units::Count::get(),
+               "Number of instructions executed in ROI"),
+      ADD_STAT(numROICycles,
+               "Number of cpu cycles with interrupts simulated in ROI"),
+      ADD_STAT(startROICycle, statistics::units::Cycle::get(),
+               "cycle in which ROI starts"),
+      ADD_STAT(endROICycle, statistics::units::Cycle::get(),
+               "cycle in which ROI ends")
 {
     // Register any of the O3CPU's stats here.
     timesIdled
@@ -339,6 +384,77 @@ CPU::CPUStats::CPUStats(CPU *cpu)
 
     quiesceCycles
         .prereq(quiesceCycles);
+
+        wastedCycles
+        .prereq(wastedCycles);
+
+    avgWastedCycles
+        .prereq(avgWastedCycles);
+    avgWastedCycles.precision(6);
+    avgWastedCycles = wastedCycles / numUserInterruptsDelivered; // this only applies to sent
+
+    flushedInsts
+        .prereq(flushedInsts);
+
+    avgFlushedInsts
+        .prereq(avgFlushedInsts);
+    avgFlushedInsts.precision(6);
+    avgFlushedInsts = flushedInsts / numUserInterruptsDelivered; // this only applies to sent
+
+    numUserInterrupts
+        .prereq(numUserInterrupts);
+    numUserInterrupts = numUserInterruptsIssued + numUserInterruptsDelivered;
+
+    endToEndSendUipiLatency
+        .init(0, 8000, 200)
+        .flags(statistics::nozero);
+
+    numUserInterruptsDelivered
+        .prereq(numUserInterruptsDelivered);
+
+    numUserInterruptsIssued
+        .prereq(numUserInterruptsIssued);
+
+    numUserInterruptUop
+        .prereq(numUserInterruptUop);
+
+    avgUserInterruptUop
+        .prereq(avgUserInterruptUop);
+    avgUserInterruptUop.precision(6);
+    avgUserInterruptUop = numUserInterruptUop / numUserInterrupts;
+
+    numInsts
+        .prereq(numInsts);
+    numCycles
+        .prereq(numCycles);
+
+    startROICycle
+        .prereq(startROICycle);
+    endROICycle
+        .prereq(endROICycle);
+    numROICycles
+        .prereq(numROICycles);
+    numROICycles = endROICycle - startROICycle;
+
+    ipc.precision(6);
+    ipc = numInsts / numCycles;
+}
+void
+CPU::timer()
+{
+    wakeCPU();
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->requestInterrupt(36, X86ISA::delivery_mode::Fixed, 0);
+    setMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 5 | (36 << 3), 0);
+    // std::cout << "Timer Resetting\n";
+    timerResetting = true;
+}
+
+void
+CPU::timer_check()
+{
+    wakeCPU();
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->requestInterrupt(36, X86ISA::delivery_mode::Fixed, 0);
+    setMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 5 | (36 << 3), 0);
 }
 
 void
@@ -350,7 +466,43 @@ CPU::tick()
 
     ++baseStats.numCycles;
     updateCycleCounters(BaseCPU::CPU_STATE_ON);
-
+    if (timerResetting) {
+        // std::cout << curTick() << ": Tick after Reset\n";
+        reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->clearUser();
+        timerResetting = false;
+    }
+    if (timerEnable) {
+        if (timerNext) {
+            timerNext = false;
+            // std::cout << timerTicks << std::endl;
+            nextTick = curTick() + timerTicks;
+            setMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 1 | (36 << 3), 0);
+            if (timerEvent.scheduled()) {
+                reschedule(timerEvent, nextTick);
+            } else {
+                schedule(timerEvent, nextTick);
+            }
+        }
+        if (((X86ISA::UintrTimerStatus)readMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 0)).timer_should_reset) {
+            // std::cout << "Timer should reset\n";
+            if (nextTick + timerTicks < curTick()) {
+                nextTick = clockEdge(Cycles(1));
+            } else {
+                nextTick = nextTick + timerTicks;
+            }
+            setMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 1 | (36 << 3), 0);
+            if (!timerEvent.scheduled()) {
+                schedule(timerEvent, nextTick);
+            }
+        }
+    } else if (timerNext) {
+        timerNext = false;
+        // std::cout << "Timer Disabled\n";
+        setMiscRegNoEffect(X86ISA::misc_reg::UintrTimerStatus, 0, 0);
+        if (timerEvent.scheduled()) {
+            timerEvent.squash();
+        }
+    }
 //    activity = false;
 
     //Tick each of the stages
@@ -384,7 +536,13 @@ CPU::tick()
             // increment stat
             lastRunningCycle = curCycle();
         } else if (!activityRec.active() || _status == Idle) {
-            DPRINTF(O3CPU, "Idle!\n");
+            if (_status == Idle) {
+                DPRINTF(O3CPU, "status Idle!\n");
+            }
+            if (!activityRec.active()) {
+
+                DPRINTF(O3CPU, "no activity Idle!\n");
+            }
             lastRunningCycle = curCycle();
             cpuStats.timesIdled++;
         } else {
@@ -397,6 +555,15 @@ CPU::tick()
         updateThreadPriority();
 
     tryDrain();
+
+    if (cycleIn || (startROI && (!inHandler))) {
+        cpuStats.numCycles++;
+        cycleIn = false;
+    }
+    if (inHandlerPost) {
+        inHandler = false;
+        inHandlerPost = false;
+    }
 }
 
 void
@@ -680,10 +847,19 @@ CPU::processInterrupts(const Fault &interrupt)
     // @todo: Allow other threads to handle interrupts.
 
     assert(interrupt != NoFault);
-    interrupts[0]->updateIntrInfo();
+    if (waitingForRecv) {
+        cpuStats.flushedInsts += instList.size();
+    }
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->updateIntrInfo(interrupt);
 
     DPRINTF(O3CPU, "Interrupt %s being handled\n", interrupt->name());
     trap(interrupt, 0, nullptr);
+}
+void
+CPU::userInterruptInfoUpdate(const Fault &interrupt)
+{
+    assert(interrupt != NoFault);
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->updateIntrInfo(interrupt);
 }
 
 void
@@ -1287,6 +1463,21 @@ CPU::dumpInsts()
         ++num;
     }
 }
+void CPU::sendUipiRegister(Tick sendTick)
+{
+    this->sendTick = sendTick;
+    waitingForRecv = true;
+}
+
+void CPU::sendUipiSent()
+{
+    cpuStats.numUserInterruptsIssued++;
+}
+void CPU::discardInterrupt()
+{
+    interrupts[0]->updateIntrInfo();
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->setReg(X86ISA::APIC_EOI, 1, 0);
+}
 /*
 void
 CPU::wakeDependents(const DynInstPtr &inst)
@@ -1340,6 +1531,22 @@ CPU::getFreeTid()
     return InvalidThreadID;
 }
 
+void CPU::calculateTicks()
+{
+    cpuStats.endToEndSendUipiLatency.sample(ticksToCycles(curTick() - sendTick));
+    waitingForRecv = false;
+    inDelivery = false;
+    totalGap += curTick() - startTick;
+    times++;
+    double ratio = (double)totalGap / (double)times;
+    startTick = 0;
+    // if (intStrategy != InterruptStrategy::Intelligent)
+    // {
+    reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->clearUser();
+    // reinterpret_cast<X86ISA::Interrupts *>(interrupts[0])->setReg(X86ISA::APIC_EOI, 1, 0);
+    // }
+    cpuStats.numUserInterruptsDelivered++;
+}
 void
 CPU::updateThreadPriority()
 {

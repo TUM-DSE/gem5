@@ -360,7 +360,14 @@ class Packet : public Printable, public Extensible<Packet>
 
         // Signal block present to squash prefetch and cache evict packets
         // through express snoop flag
-        BLOCK_CACHED          = 0x00010000
+        BLOCK_CACHED          = 0x00010000,
+
+        // SHIN
+        DDIO_PREFETCH_HINT     = 0x00020000,
+        DDIO_PREFETCH_HEADER = 0x00040000,
+
+        // Block is from IO
+        BLOCK_IO = 0x00100000
     };
 
     Flags flags;
@@ -465,6 +472,8 @@ class Packet : public Printable, public Extensible<Packet>
      * populated with the current SenderState of a packet before
      * modifying the senderState field in the request packet.
      */
+    Tick tick;
+
     struct SenderState
     {
         SenderState* predecessor;
@@ -1156,7 +1165,7 @@ class Packet : public Printable, public Extensible<Packet>
   public:
     /**
      * @{
-     * @name Data accessor mehtods
+     * @name Data accessor methods
      */
 
     /**
@@ -1437,6 +1446,15 @@ class Packet : public Printable, public Extensible<Packet>
         return cmd == MemCmd::CleanEvict || cmd == MemCmd::WritebackClean;
     }
 
+    /**
+     * Is this packet a clean invalidate request, e.g., clflush/clflushopt?
+     */
+    /*bool
+    isCleanInvalidateRequest() const
+    {
+        return cmd == MemCmd::CleanInvalidReq;
+    }*/
+
     bool
     isMaskedWrite() const
     {
@@ -1485,6 +1503,46 @@ class Packet : public Printable, public Extensible<Packet>
      */
     std::string print() const;
 
+  private:
+    // ADQ
+    int ddio_prefetch_id = -1;
+
+    // SHIN. For MLC/LLC/Mem DDIO
+    int ddio_prefetch_destination = -1;
+    bool is_ddio_pkt = false;
+    bool is_ddio_header = false;
+
+    // SHIN. For MLC Prefetch
+    bool is_prefetch_hint_pkt = false;
+    bool is_block_io;
+
+  public:
+    void setDdioPrefetchId(int ddio_id) { ddio_prefetch_id = ddio_id; }
+    void setDdioPrefetchDestination(int ddio_dest) { ddio_prefetch_destination = ddio_dest; }
+    void setDdioHeader()
+    {
+        is_ddio_header = true;
+        flags.set(DDIO_PREFETCH_HEADER);
+    }
+    void setPrefetchHintPkt() { is_prefetch_hint_pkt = true; }
+    void unsetPrefetchHintPkt() { is_prefetch_hint_pkt = false; }
+    void setDdioPkt() { is_ddio_pkt = true; }
+
+    int getDdioPrefetchId() { return ddio_prefetch_id; }
+    int getDdioPrefetchDestination() { return ddio_prefetch_destination; }
+    bool isDdioPkt() { return is_ddio_pkt; }
+    bool isDdioHeader()
+    {
+        return is_ddio_header || flags.isSet(DDIO_PREFETCH_HEADER);
+    }
+    bool isPrefetchHintPkt() { return is_prefetch_hint_pkt; }
+    bool isPrefetchHintPktConst() const { return is_prefetch_hint_pkt; }
+    int getDdioPrefetchDestinationConst() const { return ddio_prefetch_destination; }
+    bool isBlockIO() { return is_block_io; }
+
+    void setBlockIO() { flags.set(BLOCK_IO); }
+    bool isBlockIO() const { return flags.isSet(BLOCK_IO); }
+    void clearBlockIO() { flags.clear(BLOCK_IO); }
     // hardware transactional memory
 
     /**

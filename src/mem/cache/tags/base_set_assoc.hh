@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014,2017 ARM Limited
+ * Copyright (c) 2012-2014, 2017, 2023-2024 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -59,6 +59,7 @@
 #include "mem/cache/replacement_policies/replaceable_entry.hh"
 #include "mem/cache/tags/base.hh"
 #include "mem/cache/tags/indexing_policies/base.hh"
+//#include "mem/cache/tags/partitioning_policies/partition_manager.hh"
 #include "mem/packet.hh"
 #include "params/BaseSetAssoc.hh"
 
@@ -114,6 +115,8 @@ class BaseSetAssoc : public BaseTags
      */
     void invalidate(CacheBlk *blk) override;
 
+    void invalidateDDIO(CacheBlk *blk) override;
+
     /**
      * Access block and update replacement data. May not succeed, in which case
      * nullptr is returned. This has all the implications of a cache access and
@@ -126,6 +129,7 @@ class BaseSetAssoc : public BaseTags
      */
     CacheBlk* accessBlock(const PacketPtr pkt, Cycles &lat) override
     {
+        //CacheBlk *blk = findBlock({pkt->getAddr(), pkt->isSecure()});
         CacheBlk *blk = findBlock(pkt->getAddr(), pkt->isSecure());
 
         // Access all tags in parallel, hence one in each way.  The data side
@@ -166,16 +170,49 @@ class BaseSetAssoc : public BaseTags
      * @return Cache block to be replaced.
      */
     CacheBlk* findVictim(Addr addr, const bool is_secure,
-                         const std::size_t size,
-                         std::vector<CacheBlk*>& evict_blks) override
+        const std::size_t size,
+        std::vector<CacheBlk*> &evict_blks) override
     {
         // Get possible entries to be victimized
         const std::vector<ReplaceableEntry*> entries =
             indexingPolicy->getPossibleEntries(addr);
 
+        // Filter entries based on PartitionID
+        //if (partitionManager) {
+        //    partitionManager->filterByPartition(entries, partition_id);
+        //}
+
         // Choose replacement victim from replacement candidates
+        //CacheBlk* victim = entries.empty() ? nullptr :
+        //    static_cast<CacheBlk*>(replacementPolicy->getVictim(entries));
         CacheBlk* victim = static_cast<CacheBlk*>(replacementPolicy->getVictim(
-                                entries));
+            entries));
+
+        // There is only one eviction for this replacement
+        evict_blks.push_back(victim);
+
+        return victim;
+    }
+
+    CacheBlk *findVictimWayPart(Addr addr, const bool is_secure,
+                                std::vector<CacheBlk*> &evict_blks,
+                                int32_t way_part) const override
+    {
+        // Get possible entries to be victimized
+
+        // FOR DDIO, we need to add some fileds to replaceable entry that
+        // indicates which ways are for ddio and which ways are not
+        // ** for set assoc indexing policy, "entries" are all the ways in
+        // one set
+        const std::vector<ReplaceableEntry *> entries =
+            indexingPolicy->getPossibleEntries(addr);
+
+        // Choose replacement victim from replacement candidates
+
+        // FOR DDIO - then in getVictim, if we are in ddio mode and this entry is
+        // going to hold ddio data, then we only choose between the taged entries.
+        CacheBlk *victim = static_cast<CacheBlk *>(replacementPolicy->getVictimWayPart(
+            entries, way_part));
 
         // There is only one eviction for this replacement
         evict_blks.push_back(victim);
@@ -196,6 +233,11 @@ class BaseSetAssoc : public BaseTags
 
         // Increment tag counter
         stats.tagsInUse++;
+
+        //if (partitionManager) {
+        //    auto partition_id = partitionManager->readPacketPartitionID(pkt);
+        //    partitionManager->notifyAcquire(partition_id);
+        //}
 
         // Update replacement policy
         replacementPolicy->reset(blk->replacementData, pkt);

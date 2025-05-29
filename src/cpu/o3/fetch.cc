@@ -56,11 +56,14 @@
 #include "cpu/o3/cpu.hh"
 #include "cpu/o3/dyn_inst.hh"
 #include "cpu/o3/limits.hh"
+#include "arch/x86/regs/misc.hh"
+#include "arch/x86/interrupts.hh"
 #include "debug/Activity.hh"
 #include "debug/Drain.hh"
 #include "debug/Fetch.hh"
 #include "debug/O3CPU.hh"
 #include "debug/O3PipeView.hh"
+#include "debug/UserInterrupt.hh"
 #include "mem/packet.hh"
 #include "params/BaseO3CPU.hh"
 #include "sim/byteswap.hh"
@@ -68,6 +71,7 @@
 #include "sim/eventq.hh"
 #include "sim/full_system.hh"
 #include "sim/system.hh"
+#include "fetch.hh"
 
 namespace gem5
 {
@@ -99,7 +103,9 @@ Fetch::Fetch(CPU *_cpu, const BaseO3CPUParams &params)
       numThreads(params.numThreads),
       numFetchingThreads(params.smtNumFetchingThreads),
       icachePort(this, _cpu),
-      finishTranslationEvent(this), fetchStats(_cpu, this)
+      finishTranslationEvent(this),
+      userInterruptProcessor(_cpu),
+      fetchStats(_cpu, this)
 {
     if (numThreads > MaxThreads)
         fatal("numThreads (%d) is larger than compiled limit (%d),\n"
@@ -539,7 +545,9 @@ Fetch::fetchCacheLine(Addr vaddr, ThreadID tid, Addr pc)
         DPRINTF(Fetch, "[tid:%i] Can't fetch cache line, cache blocked\n",
                 tid);
         return false;
-    } else if (checkInterrupt(pc) && !delayedCommit[tid]) {
+    }
+    if (!cacheBlocked && checkInterrupt(pc) && !delayedCommit[tid]) {
+        // ?Berk do we stall for interrupt?
         // Hold off fetch from getting new instructions when:
         // Cache is blocked, or
         // while an interrupt is pending and we're not in PAL mode, or
@@ -655,6 +663,16 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
         // Translation faulted, icache request won't be sent.
         memReq[tid] = NULL;
 
+        // if (!mem_req->getVaddr())
+        // {
+        //     if (cpu->userIntAtLeastOnce)
+        //     {
+        //         X86ISA::HandyM5Reg m5reg = cpu->readMiscRegNoEffect(X86ISA::misc_reg::M5Reg, 0);
+        //         std::cout << "CPL is : " << m5reg.cpl << std::endl;
+        //         std::cout << std::flush;
+        //         assert(false);
+        //     }
+        // }
         // Send the fault to commit.  This thread will not do anything
         // until commit handles the fault.  The only other way it can
         // wake up is if a squash comes along and changes the PC.
@@ -680,6 +698,15 @@ Fetch::finishTranslation(const Fault &fault, const RequestPtr &mem_req)
                 tid, fault->name(), *pc[tid]);
     }
     _status = updateFetchStatus();
+}
+
+void Fetch::wastedUserInterrupt(ThreadID tid, Addr pc)
+{
+
+    if (checkInterrupt(pc) &&
+        !delayedCommit[tid] && cpu->waitingForRecv) {
+        cpu->cpuStats.wastedCycles++;
+    }
 }
 
 void
@@ -729,6 +756,63 @@ Fetch::doSquash(const PCStateBase &new_pc, const DynInstPtr squashInst,
     // interrupts are not handled when they cannot be, though
     // some opportunities to handle interrupts may be missed.
     delayedCommit[tid] = true;
+
+    ++fetchStats.squashCycles;
+}
+
+void Fetch::updatePCWithoutSquash(const PCStateBase &new_pc,
+    ThreadID tid)
+{
+    set(pc[tid], new_pc);
+    fetchOffset[tid] = 0;
+    macroop[tid] = NULL;
+}
+void Fetch::doSquashInterrupt(const PCStateBase &new_pc, const DynInstPtr squashInst,
+    ThreadID tid)
+{
+    DPRINTF(Fetch, "[tid:%i] Squashing, setting PC to: %s.\n",
+            tid, new_pc);
+
+    set(pc[tid], new_pc);
+    fetchOffset[tid] = 0;
+    if (squashInst && squashInst->pcState().instAddr() == new_pc.instAddr())
+        macroop[tid] = squashInst->macroop;
+    else
+        macroop[tid] = NULL;
+    decoder[tid]->reset();
+
+    // Clear the icache miss if it's outstanding.
+    if (fetchStatus[tid] == IcacheWaitResponse) {
+        DPRINTF(Fetch, "[tid:%i] Squashing outstanding Icache miss.\n",
+                tid);
+        memReq[tid] = NULL;
+    } else if (fetchStatus[tid] == ItlbWait) {
+        DPRINTF(Fetch, "[tid:%i] Squashing outstanding ITLB miss.\n",
+                tid);
+        memReq[tid] = NULL;
+    }
+
+    // Get rid of the retrying packet if it was from this thread.
+    if (retryTid == tid) {
+        assert(cacheBlocked);
+        if (retryPkt) {
+            delete retryPkt;
+        }
+        retryPkt = NULL;
+        retryTid = InvalidThreadID;
+    }
+
+    fetchStatus[tid] = Squashing;
+
+    // Empty fetch queue
+    fetchQueue[tid].clear();
+
+    // microops are being squashed, it is not known wheather the
+    // youngest non-squashed microop was  marked delayed commit
+    // or not. Setting the flag to true ensures that the
+    // interrupts are not handled when they cannot be, though
+    // some opportunities to handle interrupts may be missed.
+    // delayedCommit[tid] = true;
 
     ++fetchStats.squashCycles;
 }
@@ -812,6 +896,18 @@ Fetch::squash(const PCStateBase &new_pc, const InstSeqNum seq_num,
 }
 
 void
+Fetch::squashInterrupt(const PCStateBase &new_pc, const InstSeqNum seq_num,
+                        DynInstPtr squashInst, ThreadID tid)
+{
+    DPRINTF(Fetch, "[tid:%i] Squash from commit.\n", tid);
+
+    doSquashInterrupt(new_pc, squashInst, tid);
+
+    // Tell the CPU to remove any instructions that are not in the ROB.
+    cpu->removeInstsNotInROB(tid);
+}
+
+void
 Fetch::tick()
 {
     std::list<ThreadID>::iterator threads = activeThreads->begin();
@@ -822,6 +918,10 @@ Fetch::tick()
 
     for (ThreadID i = 0; i < numThreads; ++i) {
         issuePipelinedIfetch[i] = false;
+    }
+    if (cpu->intStrategy == InterruptStrategy::Intelligent) {
+
+        // want to check before other signals.
     }
 
     while (threads != end) {
@@ -837,11 +937,79 @@ Fetch::tick()
 
     if (FullSystem) {
         if (fromCommit->commitInfo[0].interruptPending) {
+            DPRINTF(UserInterrupt, "pending\n");
             interruptPending = true;
         }
 
         if (fromCommit->commitInfo[0].clearInterrupt) {
+            DPRINTF(UserInterrupt, "not pending anymore\n");
             interruptPending = false;
+        }
+    }
+    if (cpu->intStrategy == InterruptStrategy::Intelligent) {
+        // if (interruptPending && userInterruptProcessor.checkIfOngoing())
+        // {
+        //     interruptPending = false;
+        // }
+
+        // if (userInterruptProcessor.checkInterrupt())
+        // {
+        bool interruptNotUser = false;
+        if (cpu->checkInterrupts(0)) {
+            Fault interrupt = cpu->getInterrupts();
+            if (!interrupt->userInt) {
+                interruptNotUser = true;
+            }
+        }
+        X86ISA::HandyM5Reg m5reg = cpu->readMiscRegNoEffect(X86ISA::misc_reg::M5Reg, 0);
+
+        if ((interruptNotUser || interruptPending || !m5reg.cpl || !userInterruptProcessor.checkFlags()) && !userInterruptProcessor.isFrozen()) {
+            // freeze only if we are not (processing an interrupt or we are just about to process one).
+            if (interruptNotUser) {
+                DPRINTF(UserInterrupt, "interruptNotUser\n");
+            }
+            if (interruptPending) {
+                DPRINTF(UserInterrupt, "interruptPending\n");
+            }
+            if (!m5reg.cpl) {
+                DPRINTF(UserInterrupt, "cpl0\n");
+            }
+            if (!userInterruptProcessor.checkFlags()) {
+                DPRINTF(UserInterrupt, "flags\n");
+            }
+            userInterruptProcessor.freeze();
+        }
+        if (!interruptNotUser && m5reg.cpl && userInterruptProcessor.checkFlags() && userInterruptProcessor.isFrozen()) {
+            userInterruptProcessor.unFreeze();
+        }
+        // }
+        if (fromCommit->commitInfo[0].clearUserInterrupt) {
+            userInterruptProcessor.resetInterrupt();
+        }
+        // we dont allow immediate interrupt handling
+        else if (!userInterruptProcessor.checkInterrupt() && cpu->checkInterrupts(0)) {
+            Fault interrupt = cpu->getInterrupts();
+            if (interrupt->userInt) {
+                uint64_t vector = reinterpret_cast<X86ISA::UserInterrupt &>(*interrupt).getVector();
+                PCStateBase &this_pc = *pc[0];
+                Addr pcOffset = fetchOffset[0];
+                Addr fetchAddr = (this_pc.instAddr() + pcOffset) & decoder[0]->pcMask();
+                userInterruptProcessor.setInterrupt(interrupt, vector, fetchAddr);
+                userInterruptProcessor.setWait();
+            }
+        }
+        if (userInterruptProcessor.checkInterrupt() && cpu->checkInterrupts(0)) {
+            Fault interrupt = cpu->getInterrupts();
+            if (interrupt->userInt) {
+                // DPRINTF(UserInterrupt, "Another user interrupt arrived but we haven't finished the other yet\n");
+            }
+        }
+        if (userInterruptProcessor.checkInterruptReady() && userInterruptProcessor.pcUsable) {
+            std::unique_ptr<PCStateBase> old_pc = userInterruptProcessor.processInterrupt();
+
+            updatePCWithoutSquash(*cpu->pcState(0).clone(), 0);
+            cpu->pcState(*old_pc, 0);
+            decoder[0]->reset();
         }
     }
 
@@ -936,18 +1104,32 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
         squash(*fromCommit->commitInfo[tid].pc,
                fromCommit->commitInfo[tid].doneSeqNum,
                fromCommit->commitInfo[tid].squashInst, tid);
+        if (!cpu->startTick && cpu->inDelivery) {
+            cpu->startTick = curTick();
+        }
 
+        bool missNotInInterrupt = true;
         // If it was a branch mispredict on a control instruction, update the
         // branch predictor with that instruction, otherwise just kill the
         // invalid state we generated in after sequence number
         if (fromCommit->commitInfo[tid].mispredictInst &&
             fromCommit->commitInfo[tid].mispredictInst->isControl()) {
+            if (!fromCommit->commitInfo[tid].mispredictInst->fetchedBeforeInterrupt) {
+                DPRINTF(UserInterrupt, "Miss is in interrupt from commit :%s\n",
+                        fromCommit->commitInfo[tid].mispredictInst->staticInst->getName());
+                missNotInInterrupt = false;
+            }
             branchPred->squash(fromCommit->commitInfo[tid].doneSeqNum,
                     *fromCommit->commitInfo[tid].pc,
                     fromCommit->commitInfo[tid].branchTaken, tid);
         } else {
             branchPred->squash(fromCommit->commitInfo[tid].doneSeqNum,
                               tid);
+        }
+        if (userInterruptProcessor.checkInterrupt() && missNotInInterrupt) {
+            DPRINTF(UserInterrupt, "Miss not in Interrupt, Interrupt Resetting as a result\n");
+            cpu->setMiscRegNoEffect(X86ISA::misc_reg::UintrOngoing, 0, 0);
+            userInterruptProcessor.setWait();
         }
 
         return true;
@@ -963,7 +1145,18 @@ Fetch::checkSignalsAndUpdate(ThreadID tid)
                 "from decode.\n",tid);
 
         // Update the branch predictor.
+        bool missNotInInterrupt = true;
         if (fromDecode->decodeInfo[tid].branchMispredict) {
+            if (!fromDecode->decodeInfo[tid].mispredictInst->fetchedBeforeInterrupt) {
+                DPRINTF(UserInterrupt, "Miss in interrupt :%s\n",
+                        fromDecode->decodeInfo[tid].mispredictInst->staticInst->getName());
+            } else {
+                if (userInterruptProcessor.checkInterrupt() && fetchStatus[tid] != Squashing) {
+                    DPRINTF(UserInterrupt, "Decode miss Interrupt Resetting as a result\n");
+                    cpu->setMiscRegNoEffect(X86ISA::misc_reg::UintrOngoing, 0, 0);
+                    userInterruptProcessor.setWait();
+                }
+            }
             branchPred->squash(fromDecode->decodeInfo[tid].doneSeqNum,
                     *fromDecode->decodeInfo[tid].nextPC,
                     fromDecode->decodeInfo[tid].branchTaken, tid);
@@ -1099,10 +1292,16 @@ Fetch::fetch(bool &status_change)
 
     bool inRom = isRomMicroPC(this_pc.microPC());
 
+    if (!inRom && !userInterruptProcessor.pcUsable) {
+        userInterruptProcessor.pcUsable = true;
+    }
     // If returning from the delay of a cache miss, then update the status
     // to running, otherwise do the cache access.  Possibly move this up
     // to tick() function.
     if (fetchStatus[tid] == IcacheAccessComplete) {
+        if (userInterruptProcessor.checkInterrupt()) {
+            // DPRINTF(UserInterrupt, "Fetch Address: %#x, inROM: %s\n", fetchAddr, (inRom ? "yes" : "no"));
+        }
         DPRINTF(Fetch, "[tid:%i] Icache miss is complete.\n", tid);
 
         fetchStatus[tid] = Running;
@@ -1111,6 +1310,7 @@ Fetch::fetch(bool &status_change)
         // Align the fetch PC so its at the start of a fetch buffer segment.
         Addr fetchBufferBlockPC = fetchBufferAlignPC(fetchAddr);
 
+        wastedUserInterrupt(tid, this_pc.instAddr());
         // If buffer is no longer valid or fetchAddr has moved to point
         // to the next cache block, AND we have no remaining ucode
         // from a macro-op, then start fetch from icache.
@@ -1143,7 +1343,8 @@ Fetch::fetch(bool &status_change)
         if (fetchStatus[tid] == Idle) {
             ++fetchStats.idleCycles;
             DPRINTF(Fetch, "[tid:%i] Fetch is idle!\n", tid);
-        }
+        } else if (fetchStatus[tid] == Squashing)
+            wastedUserInterrupt(tid, this_pc.instAddr());
 
         // Status is Idle, so fetch should do nothing.
         return;
@@ -1214,6 +1415,7 @@ Fetch::fetch(bool &status_change)
 
         // Extract as many instructions and/or microops as we can from
         // the memory we've processed so far.
+        bool hacky_out_interrupt = false;
         do {
             if (!(curMacroop || inRom)) {
                 if (dec_ptr->instReady()) {
@@ -1245,10 +1447,16 @@ Fetch::fetch(bool &status_change)
                     staticInst = curMacroop->fetchMicroop(this_pc.microPC());
                 }
                 newMacro |= staticInst->isLastMicroop();
+                // ASK Kazem maybe we can let the loop go through once here but if this loop terminates
+                //  because of fetch width, or maybe decoder isnt done because of cache stuff?
+                // i can just ignore fetch width and copy this after the loop but cache if something needs more bytes do we wait for the cache access??
             }
 
             DynInstPtr instruction = buildInst(
                     tid, staticInst, curMacroop, this_pc, *next_pc, true);
+
+            bool fetchInterruptStarted = cpu->readMiscRegNoEffect(X86ISA::misc_reg::UintrOngoing, 0);
+            instruction->fetchedBeforeInterrupt = !fetchInterruptStarted;
 
             ppFetch->notify(instruction);
             numInst++;
@@ -1280,6 +1488,17 @@ Fetch::fetch(bool &status_change)
                 blkOffset = (fetchAddr - fetchBufferPC[tid]) / instSize;
                 pcOffset = 0;
                 curMacroop = NULL;
+                if (!userInterruptProcessor.isFrozen() && userInterruptProcessor.shouldWait() && !predictedBranch) { // not ideal
+                    DPRINTF(UserInterrupt, "We are about to issue!\n");
+                    userInterruptProcessor.setInterrupt(this_pc.instAddr());
+                    userInterruptProcessor.setIssue();
+                    userInterruptProcessor.resetWait();
+                    if (numInst > 0) {
+                        wroteToTimeBuffer = true;
+                    }
+                    hacky_out_interrupt = true;
+                    break;
+                }
             }
 
             if (instruction->isQuiesce()) {
@@ -1297,6 +1516,13 @@ Fetch::fetch(bool &status_change)
         // Re-evaluate whether the next instruction to fetch is in micro-op ROM
         // or not.
         inRom = isRomMicroPC(this_pc.microPC());
+        if (inRom && cpu->inHandlerPre) {
+            cpu->inHandler = true;
+            cpu->inHandlerPre = false;
+        }
+        if (hacky_out_interrupt) {
+            break;
+        }
     }
 
     if (predictedBranch) {
