@@ -109,6 +109,10 @@
 #include "sim/syscall_emul_buf.hh"
 #include "sim/syscall_return.hh"
 
+#include "debug/Faults.hh"
+#include "mem/uffd_region_tracker.hh"
+#include <linux/userfaultfd.h>
+
 #if defined(__APPLE__) && defined(__MACH__) && !defined(CMSG_ALIGN)
 #define CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & ~(sizeof(size_t) - 1))
 #elif defined(__FreeBSD__) && !defined(CMSG_ALIGN)
@@ -686,6 +690,30 @@ SyscallReturn
 ioctlFunc(SyscallDesc *desc, ThreadContext *tc,
           int tgt_fd, unsigned req, VPtr<> addr)
 {
+    DPRINTF(Faults, "[syscall_emul] ioctl called\n");
+    if (req == UFFDIO_REGISTER) {
+        DPRINTF(Faults, "[syscall_emul] IOCTL with UFFDIO_REGISTER\n");
+
+        BufferArg reg_arg(addr, sizeof(uffdio_register));
+        reg_arg.copyIn(SETranslatingPortProxy(tc));
+
+        uffdio_register *ureg = (uffdio_register*)reg_arg.bufferPtr();
+
+        Addr start = ureg->range.start;
+        Addr end = start + ureg->range.len;
+
+        UffdRegionTracker::get().addRegion(start, end);
+    }
+    if (req == UFFDIO_UNREGISTER) {
+        DPRINTF(Faults, "[syscall_emul] IOCTL with UFFDIO_UNREGISTER\n");
+
+        BufferArg unreg_arg(addr, sizeof(uffdio_range));
+        unreg_arg.copyIn(SETranslatingPortProxy(tc));
+
+        uffdio_range *urange = (uffdio_range*)unreg_arg.bufferPtr();
+
+        gem5::UffdRegionTracker::get().removeRegion(urange->start, urange->start + urange->len);
+    }
     auto p = tc->getProcessPtr();
 
     DPRINTF_SYSCALL(Verbose, "ioctl(%d, 0x%x, ...)\n", tgt_fd, req);

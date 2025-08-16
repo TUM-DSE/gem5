@@ -45,6 +45,8 @@
 #include "params/BaseMMU.hh"
 #include "sim/sim_object.hh"
 
+#include "mem/uffd_region_tracker.hh"
+
 namespace gem5
 {
 
@@ -53,6 +55,9 @@ class BaseTLB;
 class BaseMMU : public SimObject
 {
   public:
+    UffdRegionTracker &getUffdRegions() { return uffdRegions; }
+    const UffdRegionTracker &getUffdRegions() const { return uffdRegions; }
+
     enum Mode { Read, Write, Execute };
 
     class Translation
@@ -85,6 +90,8 @@ class BaseMMU : public SimObject
     };
 
   protected:
+    UffdRegionTracker uffdRegions;
+
     typedef BaseMMUParams Params;
 
     BaseMMU(const Params &p)

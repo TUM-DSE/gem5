@@ -56,3 +56,7 @@ DebugFlag('MC146818')
 
 GTest('reg_bank.test', 'reg_bank.test.cc')
 DebugFlag('AdaptiveDdioNic')
+
+SimObject('UffdMmioDevice.py', sim_objects=['UffdMmioDevice'])
+Source('UffdMmioDevice.cc')
+DebugFlag('UffdMMIO')
