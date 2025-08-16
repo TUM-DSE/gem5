@@ -39,6 +39,8 @@
 #include "mem/packet_access.hh"
 #include "sim/system.hh"
 
+#include "debug/UserInterrupt.hh"
+
 namespace gem5
 {
 
@@ -181,7 +183,7 @@ void
 X86ISA::I82094AA::requestInterrupt(int line)
 {
     if (line == -1) {
-
+        DPRINTF(UserInterrupt, "[i82094aa] Passing through interrupt controller with special case -1\n");
         TriggerIntMessage message = 0;
 
         message.destination = 0xFF;
@@ -229,6 +231,7 @@ X86ISA::I82094AA::requestInterrupt(int line)
 void
 X86ISA::I82094AA::signalInterrupt(TriggerIntMessage message)
 {
+    DPRINTF(UserInterrupt, "[i82094aa] Entered signalInterrupt\n");
     std::list<int> apics;
     int numContexts = sys->threads.size();
     if (message.destMode == 0) {
@@ -238,6 +241,7 @@ X86ISA::I82094AA::signalInterrupt(TriggerIntMessage message)
                     "destination mode.\n");
         }
         if (message.destination == 0xFF) {
+            DPRINTF(UserInterrupt, "[i82094aa] Collecting all local APIC targets\n");
             for (int i = 0; i < numContexts; i++) {
                 apics.push_back(i);
             }
@@ -272,6 +276,7 @@ X86ISA::I82094AA::signalInterrupt(TriggerIntMessage message)
             apics.push_back(selected);
         }
     }
+    DPRINTF(UserInterrupt, "[i82094aa] Sending to all local APICs\n");
     for (auto id: apics) {
         PacketPtr pkt = buildIntTriggerPacket(id, message);
         intRequestPort.sendMessage(pkt, sys->isTimingMode());

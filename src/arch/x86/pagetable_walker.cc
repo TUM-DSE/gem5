@@ -63,6 +63,8 @@
 #include "mem/packet_access.hh"
 #include "mem/request.hh"
 
+#include "debug/TLB.hh"
+
 namespace gem5
 {
 
@@ -75,6 +77,7 @@ Walker::start(ThreadContext * _tc, BaseMMU::Translation *_translation,
     // TODO: in timing mode, instead of blocking when there are other
     // outstanding requests, see if this request can be coalesced with
     // another one (i.e. either coalesce or start walk)
+    DPRINTF(TLB, "[pagetable_walker] Entered start\n");
     WalkerState * newState = new WalkerState(this, _translation, _req);
     newState->initState(_tc, _mode, sys->isTimingMode());
     if (currStates.size()) {
@@ -229,6 +232,7 @@ Walker::startWalkWrapper()
 Fault
 Walker::WalkerState::startWalk()
 {
+    DPRINTF(TLB, "[pagetable_walker] Entered startWalk\n");
     Fault fault = NoFault;
     assert(!started);
     started = true;
@@ -258,6 +262,7 @@ Walker::WalkerState::startWalk()
 Fault
 Walker::WalkerState::startFunctional(Addr &addr, unsigned &logBytes)
 {
+    DPRINTF(TLB, "[pagetable_walker] Entered startFunctional\n");
     Fault fault = NoFault;
     assert(!started);
     started = true;
@@ -282,6 +287,7 @@ Walker::WalkerState::startFunctional(Addr &addr, unsigned &logBytes)
 Fault
 Walker::WalkerState::stepWalk(PacketPtr &write)
 {
+    DPRINTF(TLB, "[pagetable_walker] Entered stepWalk\n");
     assert(state != Ready && state != Waiting);
     Fault fault = NoFault;
     write = NULL;

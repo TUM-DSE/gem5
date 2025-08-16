@@ -61,6 +61,8 @@
 #include "params/PciMemUpperBar.hh"
 #include "sim/byteswap.hh"
 
+#include "debug/UserInterrupt.hh"
+
 #define BAR_NUMBER(x) (((x) - PCI0_BASE_ADDR0) >> 0x2);
 
 namespace gem5
@@ -362,7 +364,10 @@ class PciDevice : public DmaDevice
     }
 
     void intrPost() { hostInterface.postInt(); }
-    void uintrPost() { hostInterface.postUInt(); }
+    void uintrPost() {
+      DPRINTF(UserInterrupt, "[device] Passing through device.hh\n");
+      hostInterface.postUInt();
+    }
     void intrClear() { hostInterface.clearInt(); }
 
     uint8_t interruptLine() const { return letoh(config.interruptLine); }

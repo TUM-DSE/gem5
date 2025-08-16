@@ -52,6 +52,8 @@
 #include "sim/stats.hh"
 #include "sim/system.hh"
 
+#include "debug/UserInterrupt.hh"
+
 namespace gem5
 {
 
@@ -1199,6 +1201,7 @@ IGbE::RxDescCache::writePacket(EthPacketPtr packet, int pkt_offset)
     unsigned buf_len, hdr_len;
 
     //INTERRUPT HERE
+    DPRINTF(UserInterrupt, "[i8254xGBe] Start of UINTR Forwarding Process\n");
     igbe->schedule(pktUintrEvent, curTick() + igbe->rxWriteDelay);
     RxDesc *desc = unusedCache.front();
     switch (igbe->regs.srrctl.desctype()) {

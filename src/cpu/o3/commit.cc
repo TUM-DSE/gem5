@@ -57,6 +57,7 @@
 #include "cpu/o3/thread_state.hh"
 #include "cpu/timebuf.hh"
 #include "arch/x86/regs/misc.hh"
+#include "arch/x86/regs/int.hh"
 #include "arch/x86/pcstate.hh"
 #include "debug/Activity.hh"
 #include "debug/Commit.hh"
@@ -69,6 +70,10 @@
 #include "params/BaseO3CPU.hh"
 #include "sim/faults.hh"
 #include "sim/full_system.hh"
+
+#include "debug/Faults.hh"
+#include "arch/x86/faults.hh"
+#include "mem/uffd_region_tracker.hh"
 
 namespace gem5
 {
@@ -486,7 +491,7 @@ Commit::generateTrapEvent(ThreadID tid, Fault inst_fault)
         "Trap", true, Event::CPU_Tick_Pri);
 
     Cycles latency = std::dynamic_pointer_cast<SyscallRetryFault>(inst_fault) ?
-                     cpu->syscallRetryLatency : trapLatency;
+                     cpu->syscallRetryLatency : trapLatency + Cycles(UffdStats::lastCheckCount * gem5::UFFD_REGION_CHECK_COST);
 
     // hardware transactional memory
     if (inst_fault != nullptr &&
@@ -1235,6 +1240,25 @@ Commit::commitInsts()
                     toIEW->commitInfo[0].clearUserInterrupt = true;
                     DPRINTF(UserInterrupt, "The committed instruction fetched after Interrupt is: %s\n", head_inst->staticInst->getName());
                 }
+                if (head_inst->staticInst->numDestRegs() > 0) {
+                    auto dest = head_inst->staticInst->destRegIdx(0);
+                    if (dest.classValue() == MiscRegClass &&
+    dest.index() == X86ISA::misc_reg::UintrScratch) {
+                        for (int i = 0; i < cpu->numThreads; ++i) {
+                            auto* tc = cpu->getContext(i);
+                            uint64_t tmp = tc->readMiscReg(X86ISA::misc_reg::UintrTemp);
+                            uint64_t scrtch = tc->readMiscReg(X86ISA::misc_reg::UintrScratch);
+                            DPRINTF(UserInterrupt, "[userinterrupt] [tid %d, core %d] Inst: %s | UintrTemp: %#016llx, UintrScratch: %#016llx\n", i, cpu->cpuId(),
+                            head_inst->staticInst->disassemble(head_inst->pcState().instAddr()).c_str(),
+                            tmp, scrtch);
+                            DPRINTF(UserInterrupt, "[userinterrupt] Uintr Frame: PC=0x%016lx, RFLAGS=0x%016lx, RSP=0x%016lx\n",
+                                tc->readMiscReg(X86ISA::misc_reg::UintrPciPC),
+                                tc->readMiscReg(X86ISA::misc_reg::UintrPciRFLAGS),
+                                tc->readMiscReg(X86ISA::misc_reg::UintrPciRSP));
+                        }
+                    }
+                }
+
                 lastCommitStartedBeforeInterrupt = head_inst->fetchedBeforeInterrupt;
                 lastPCofCommit = head_inst->predPC->instAddr();
                 ++num_committed;
@@ -1501,7 +1525,40 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
         // needed to update the state as soon as possible.  This
         // prevents external agents from changing any specific state
         // that the trap need.
-        cpu->trap(inst_fault, tid,
+        auto pf = std::dynamic_pointer_cast<X86ISA::PageFault>(inst_fault);
+        Fault temp_fault = inst_fault;
+        
+        if (pf) {
+            UffdStats::lastCheckCount = 0;
+            Addr fault_addr = pf->getAddr();
+            uint64_t errorCode = pf->getErrorCode();
+            DPRINTF(Faults, "[commit] PageFault during commit: addr=0x%lx, errorCode=0x%" PRIx64 "\n",
+                    fault_addr, errorCode);
+
+            auto* tc = cpu->getContext(tid);
+            X86ISA::RFLAGS rflags = tc->readMiscRegNoEffect(X86ISA::misc_reg::Rflags);
+            X86ISA::UintrMisc misc = tc->readMiscRegNoEffect(X86ISA::misc_reg::UintrMisc);
+
+            auto res = UffdRegionTracker::get().isBacked(fault_addr);
+            //cpu->cpuStats.numCycles += res.regions_checked * gem5::UFFD_REGION_CHECK_COST;
+            UffdStats::lastCheckCount = res.regions_checked;
+
+            bool is_uffd_backed = res.is_backed;
+            bool uintr_enabled = misc.uif;
+            bool rflags_set = rflags.intf;
+
+            printf("[commit] uffd-backed=%s, misc.uif=%s, rflags.intf=%s, error_code=0x%" PRIx64 ", addr=0x%" PRIx64 "\n",
+                    is_uffd_backed ? "true" : "false",
+                    uintr_enabled ? "true" : "false",
+                    rflags_set ? "true" : "false",
+                    errorCode,
+                    pf->getAddr());
+            if (is_uffd_backed && uintr_enabled && rflags_set) {
+                DPRINTF(Faults, "[commit] Start of interrupt forwarding for UserPageFault\n");
+                temp_fault = std::make_shared<X86ISA::UserPageFault>(fault_addr, errorCode);
+            }
+        }
+        cpu->trap(temp_fault, tid,
                   head_inst->notAnInst() ? nullStaticInstPtr :
                       head_inst->staticInst);
 

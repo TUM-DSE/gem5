@@ -40,6 +40,8 @@
 #include "dev/x86/south_bridge.hh"
 #include "sim/system.hh"
 
+#include "debug/UserInterrupt.hh"
+
 namespace gem5
 {
     Tick *timer_tix = nullptr;
@@ -129,6 +131,7 @@ Pc::postPciInt(int line)
 void
 Pc::postPciUInt()
 {
+    DPRINTF(UserInterrupt, "[pc] Passing through pc\n");
     southBridge->ioApic->requestInterrupt(-1);
 }
 

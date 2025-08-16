@@ -46,6 +46,8 @@
 #include "params/GenericPciHost.hh"
 #include "params/PciHost.hh"
 
+#include "debug/UserInterrupt.hh"
+
 namespace gem5
 {
 
@@ -114,7 +116,7 @@ void
 PciHost::DeviceInterface::postUInt()
 {
     DPRINTF(PciHost, "postInt\n");
-
+    DPRINTF(UserInterrupt, "[host] Passing through host\n");
     reinterpret_cast<GenericPciHost *>(&host)->postUInt();
 }
 
@@ -221,6 +223,7 @@ GenericPciHost::postInt(const PciBusAddr &addr, PciIntPin pin)
 void
 GenericPciHost::postUInt()
 {
+    DPRINTF(UserInterrupt, "[host] Second cast in host\n");
     reinterpret_cast<Pc *>(&platform)->postPciUInt();
 }
 void

@@ -54,6 +54,10 @@
 
 #include "sim/pseudo_inst.hh"
 #include "arch/x86/pseudo_inst_abi.hh"
+
+#include "debug/UserInterrupt.hh"
+#include "debug/TLB.hh"
+
 namespace gem5
 {
 
@@ -63,6 +67,8 @@ namespace X86ISA
 void
 X86FaultBase::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    if (vector == 14)
+        DPRINTF(Faults, "[faults] Entered default invoke in a pagefault context\n");
     if (!FullSystem) {
         FaultBase::invoke(tc, inst);
         return;
@@ -74,25 +80,43 @@ X86FaultBase::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
     MicroPC entry;
     if (m5reg.mode == LongMode) {
+        if (vector == 14) {
+            DPRINTF(Faults, "[faults] LongMode -> longModeinterrupt\n");
+        }
         entry = extern_label_longModeInterrupt;
     } else {
-        if (m5reg.submode == RealMode)
+        if (m5reg.submode == RealMode) {
+            if (vector == 14) {
+                DPRINTF(Faults, "[faults] RealMode -> realModeinterrupt\n");
+            }
             entry = extern_label_realModeInterrupt;
-        else
+        } else {
+            if (vector == 14) {
+                DPRINTF(Faults, "[faults] LegacyMode -> legacyModeinterrupt\n");
+            }
             entry = extern_label_legacyModeInterrupt;
+        }
     }
     tc->setReg(intRegMicro(1), vector);
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
     tc->setReg(intRegMicro(7), pc.pc() - cs_base);
     if (errorCode != (uint64_t)(-1)) {
         if (m5reg.mode == LongMode) {
+            if (vector == 14) {
+                DPRINTF(Faults, "[faults] longModeInterruptWithError %" PRIu64 "\n", errorCode);
+            }
             entry = extern_label_longModeInterruptWithError;
         } else {
             panic("Legacy mode interrupts with error codes "
                     "aren't implemented.");
         }
         tc->setReg(intRegMicro(15), errorCode);
+        DPRINTF(Faults, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
     }
+    if (vector == 14) {
+        DPRINTF(Faults, "[faults] Setting microcode routine\n");
+    }
+    
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
     tc->pcState(pc);
@@ -114,6 +138,7 @@ X86Trap::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
     // This is the same as a fault, but it happens -after- the
     // instruction.
+    DPRINTF(Faults, "[faults] Passing through X86Trap::invoke\n");
     X86FaultBase::invoke(tc);
 }
 
@@ -141,6 +166,7 @@ InvalidOpcode::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 PageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    DPRINTF(Faults, "[faults] Entered PageFault::invoke\n");
     if (FullSystem) {
         // Invalidate any matching TLB entries before handling the page fault.
         tc->getMMUPtr()->demapPage(addr, 0);
@@ -323,6 +349,7 @@ StartupInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 UserInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    DPRINTF(UserInterrupt, "[faults] Entered invoke for UserInterrupt\n");
     if (!FullSystem) {
         FaultBase::invoke(tc, inst);
         return;
@@ -338,8 +365,10 @@ UserInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     MicroPC entry;
     if (m5reg.mode == LongMode) {
         if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy == InterruptStrategy::Intelligent) {
+            DPRINTF(UserInterrupt, "[faults] Long mode with tracked UINTR\n");
             entry = extern_label_longModeTrackUserInterrupt;
         } else {
+            DPRINTF(UserInterrupt, "[faults] Normal long mode\n");
             entry = extern_label_longModeUserInterrupt;
         }
     } else {
@@ -355,6 +384,7 @@ UserInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     }
     if (errorCode != (uint64_t)(-1)) {
         if (m5reg.mode == LongMode) {
+            DPRINTF(UserInterrupt, "[faults] Long mode UINTR with error\n");
             entry = extern_label_longModeUserInterruptWithError;
         } else {
             panic("Legacy mode interrupts with error codes "
@@ -362,6 +392,7 @@ UserInterrupt::invoke(ThreadContext *tc, const StaticInstPtr &inst)
         }
         tc->setReg(intRegMicro(15), errorCode);
     }
+    DPRINTF(UserInterrupt, "[faults] Entering micro code execution\n");
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
@@ -419,6 +450,7 @@ UserTimer::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
+    DPRINTF(UserInterrupt, "[faults] Entered UserPci invoke\n");
     if (!FullSystem) {
         FaultBase::invoke(tc, inst);
         return;
@@ -434,8 +466,10 @@ UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     MicroPC entry;
     if (m5reg.mode == LongMode) {
         if (reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->intStrategy == InterruptStrategy::Intelligent) {
+            DPRINTF(UserInterrupt, "[faults] Long mode with tracked UINTR\n");
             entry = extern_label_longModeTrackUserPci;
         } else {
+            DPRINTF(UserInterrupt, "[faults] Normal long mode\n");
             entry = extern_label_longModeUserPci;
         }
     } else {
@@ -451,6 +485,7 @@ UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     }
     if (errorCode != (uint64_t)(-1)) {
         if (m5reg.mode == LongMode) {
+            DPRINTF(UserInterrupt, "[faults] Long mode user timer with errors\n");
             entry = extern_label_longModeUserTimerWithError;
         } else {
             panic("Legacy mode interrupts with error codes "
@@ -458,11 +493,93 @@ UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
         }
         tc->setReg(intRegMicro(15), errorCode);
     }
+    DPRINTF(UserInterrupt, "[faults] Entering micro code execution on core %d, thread %d\n", tc->getCpuPtr()->cpuId(), tc->threadId());
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
     tc->pcState(pc);
+}
+
+void
+UserPageFaultForward::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+{
+    DPRINTF(Faults, "[faults] Entered UserPageFaultForward::invoke\n");
+    if (!FullSystem) {
+        FaultBase::invoke(tc, inst);
+        return;
+    }
+    Addr addr = tc->readMiscRegNoEffect(misc_reg::UintrPageFaultForwardAddr);
+    tc->getMMUPtr()->demapPage(addr, 0);
+    uint64_t errorCode = tc->readMiscRegNoEffect(misc_reg::UintrPageFaultErrorCode);
+
+    tc->setMiscReg(misc_reg::UintrPageFaultForwardAddr, 0);
+    tc->setMiscReg(misc_reg::UintrPageFaultErrorCode, 0);
+
+    PCState pc = tc->pcState().as<PCState>();
+    assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
+
+    DPRINTF(Faults, "RIP %#x: User page fault forward %d: %s\n", pc.pc(), vector, describe());
+
+    using namespace X86ISAInst::rom_labels;
+    X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
+    MicroPC entry = extern_label_longModeUserPageFaultWithError;
+
+    tc->setReg(intRegMicro(1), vector);
+    Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
+    tc->setReg(intRegMicro(7), pc.pc() - cs_base);
+    tc->setReg(intRegMicro(15), errorCode);
+
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    tc->pcState(pc);
+
+    if (m5reg.mode == LongMode)
+            tc->setMiscReg(misc_reg::Cr2, addr);
+        else
+            tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
+}
+
+void
+UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
+{
+    DPRINTF(Faults, "[faults] Entered UserPageFault::invoke\n");
+    if (!FullSystem) {
+        FaultBase::invoke(tc, inst);
+        return;
+    }
+
+    tc->getMMUPtr()->demapPage(addr, 0);
+    PCState pc = tc->pcState().as<PCState>();
+    assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
+
+    DPRINTF(Faults, "RIP %#x: User page fault %d: %s\n", pc.pc(), vector, describe());
+
+    using namespace X86ISAInst::rom_labels;
+    X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
+    // we should always be in FullSystem, LongMode and have an errorCode != -1
+    MicroPC entry = extern_label_longModeUserPageFaultWithError;
+    
+    tc->setReg(intRegMicro(1), vector);
+    Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
+    tc->setReg(intRegMicro(7), pc.pc() - cs_base);
+    tc->setReg(intRegMicro(15), errorCode);
+
+    DPRINTF(Faults, "[faults] About to set the UserPageFault microcode routine\n");
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
+    //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    tc->pcState(pc);
+    DPRINTF(Faults, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
+
+
+    if (m5reg.mode == LongMode)
+            tc->setMiscReg(misc_reg::Cr2, addr);
+        else
+            tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 }
 } // namespace X86ISA
 } // namespace gem5

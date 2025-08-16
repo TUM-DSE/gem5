@@ -49,6 +49,8 @@
 #include "mem/tport.hh"
 #include "sim/sim_object.hh"
 
+#include "debug/UserInterrupt.hh"
+
 namespace gem5
 {
 
@@ -76,6 +78,7 @@ class IntResponsePort : public SimpleTimingPort
     Tick
     recvAtomic(PacketPtr pkt)
     {
+        DPRINTF(UserInterrupt, "[intdev] Reached receiver side through intdev\n");
         panic_if(pkt->cmd != MemCmd::WriteReq,
                 "%s received unexpected command %s from %s.\n",
                 name(), pkt->cmd.toString(), getPeer());

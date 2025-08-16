@@ -323,6 +323,7 @@ TLB::translate(const RequestPtr &req,
         ThreadContext *tc, BaseMMU::Translation *translation,
         BaseMMU::Mode mode, bool &delayedResponse, bool timing)
 {
+    DPRINTF(TLB, "[tlb] Entered translate\n");
     Request::Flags flags = req->getFlags();
     int seg = flags & SegmentFlagMask;
     bool storeCheck = flags & Request::READ_MODIFY_WRITE;
@@ -332,6 +333,7 @@ TLB::translate(const RequestPtr &req,
     // If this is true, we're dealing with a request to a non-memory address
     // space.
     if (seg == segment_idx::Ms) {
+        DPRINTF(TLB, "[tlb] Request to a non-memory address space\n");
         return translateInt(mode == BaseMMU::Read, req, tc);
     }
 

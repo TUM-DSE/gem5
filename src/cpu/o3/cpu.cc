@@ -66,6 +66,10 @@
 #include "arch/x86/regs/msr.hh"
 #include "dev/net/load_generator.hh"
 
+#include "debug/UserInterrupt.hh"
+#include "debug/Faults.hh"
+#include "arch/x86/pcstate.hh"
+
 namespace gem5
 {
 
@@ -846,6 +850,11 @@ CPU::processInterrupts(const Fault &interrupt)
     // @todo: Possibly consolidate the interrupt checking code.
     // @todo: Allow other threads to handle interrupts.
 
+    auto x86_fault = std::dynamic_pointer_cast<X86ISA::X86FaultBase>(interrupt);
+    if (x86_fault && x86_fault->getVector() == 14) {
+        DPRINTF(Faults, "[cpu] Entered processInterrupts: Interrupt is a page fault (vector 14)\n");
+    }
+
     assert(interrupt != NoFault);
     if (waitingForRecv) {
         cpuStats.flushedInsts += instList.size();
@@ -866,6 +875,8 @@ void
 CPU::trap(const Fault &fault, ThreadID tid, const StaticInstPtr &inst)
 {
     // Pass the thread's TC into the invoke method.
+    DPRINTF(UserInterrupt, "[cpu] trap called: fault=%s, thread=%d\n", fault->name(), tid);
+    DPRINTF(Faults, "[cpu] trap called: fault=%s, thread=%d\n", fault->name(), tid);
     fault->invoke(threadContexts[tid], inst);
 }
 
@@ -1277,7 +1288,12 @@ CPU::pcState(ThreadID tid)
 void
 CPU::pcState(const PCStateBase &val, ThreadID tid)
 {
+    DPRINTF(Faults, "[cpu] CPU::pcState called with pc=%#x, upc=%u, nupc=%u\n",
+    val.as<X86ISA::PCState>().pc(), val.as<X86ISA::PCState>().upc(), val.as<X86ISA::PCState>().nupc());
     commit.pcState(val, tid);
+
+    X86ISA::PCState stored_pc = commit.pcState(tid).as<X86ISA::PCState>();
+    DPRINTF(Faults, "[cpu] CPU::pcState stored PCState: pc=0x%llx, upc=%u, nupc=%u\n", stored_pc.pc(), stored_pc.upc(), stored_pc.nupc());
 }
 
 void

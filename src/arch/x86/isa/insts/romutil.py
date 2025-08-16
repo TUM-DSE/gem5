@@ -182,6 +182,9 @@ def rom
     # On entry, t1 is set to the vector of the interrupt and t7 is the current
     # ip. We need that because rdip returns the next ip.
     extern %(startLabel)s:
+
+    wrval ctrlRegIdx("misc_reg::UintrScratch"), t7, dataSize=8
+    
     #UIF:=0
     rdval t3, ctrlRegIdx("misc_reg::UintrMisc")
     limm t6, ~(1<<63), dataSize=8
@@ -223,6 +226,11 @@ def rom
     #RSP:=RSP & ~FH;  H in FH means hexadecimal
     limm t2, ~0xF, dataSize=8
     and rsp, rsp, t2, dataSize=8
+
+    subi rsp, rsp, 16, dataSize=8
+    limm t9, 0xDEADC0DEDEADC0DE, dataSize=8
+    st t9, ss, [1, t0, rsp], dataSize=8, addressSize=8
+
     #RSP:=RSP-8
     subi rsp, rsp, 8, dataSize=8
     #MEM[SS:RSP]:=holdRSP
@@ -309,7 +317,9 @@ def rom
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler")
     wripi t1, 0, dataSize=8
 
-
+    #limm t9, 0xDEADC0DEDEADC0DE, dataSize=8
+    #wrval ctrlRegIdx("misc_reg::UintrScratch"), t7, dataSize=8
+    #panic "Just wrote to MSR UintrScratch from userInt"
 
     eret
     %(startLabel)s_end:
@@ -379,7 +389,9 @@ def rom
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler")
     wripi t1, 0, dataSize=8
 
-
+    #limm t9, 0xFEEDFACEFEEDFACE, dataSize=8
+    #wrval ctrlRegIdx("misc_reg::UintrScratch"), t7, dataSize=8
+    #panic "Just wrote to MSR UintrScratch from userTimer"
 
     eret
     %(startLabel)s_end:
@@ -428,13 +440,75 @@ def rom
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8
     wripi t1, 0, dataSize=8
 
-
+    #limm t9, 0xCAFEBABECAFEBABE, dataSize=8
+    # Instead of a magic number, use PC with a variable value
+    #wrval ctrlRegIdx("misc_reg::UintrScratch"), t7, dataSize=8
+    #panic "Just wrote to MSR UintrScratch from userPci"
 
     eret
     %(startLabel)s_end:
     eret
 };
 """
+
+userPageFaultCodeTemplate = """
+def rom
+{
+    extern %(startLabel)s:
+    
+    #UIF:=0
+    rdval t3, ctrlRegIdx("misc_reg::UintrMisc")
+    limm t6, ~(1<<63), dataSize=8
+    and t3, t3, t6, dataSize=8
+    wrval ctrlRegIdx("misc_reg::UintrMisc"), t3
+    #HACK HACK HACK USER INTERRUPT NOTIFICATION PROCESSING CODE
+    %(add_pc_change)s
+
+    #If any bit is set in the temporary register, the logical processor sets in UIRR each bit corresponding to a bit set
+    #in the temporary register (e.g., with an OR operation) and recognizes a pending user interrupt (if it has not
+    #already done so).
+    # THIS IS NOT DONE HERE AND CURRENTLY NOT DONE ANYWHERE
+
+    #holdRSP:=RSP
+    mov t6, t6, rsp, dataSize=8
+    #RSP:=RSP & ~FH;  H in FH means hexadecimal
+    limm t2, ~0xF, dataSize=8
+    and rsp, rsp, t2, dataSize=8
+
+    subi rsp, rsp, 8, dataSize=8
+    st t15, hs, [1, t0, rsp], dataSize=8, addressSize=8
+    subi rsp, rsp, 8, dataSize=8
+    rdval t9, ctrlRegIdx("misc_reg::Cr2"),dataSize=8
+    limm t2, ~(4096 - 1), dataSize=8
+    and t9, t9, t2, dataSize=8
+    st t9, ss, [1, t0, rsp], dataSize=8, addressSize=8
+
+    #RSP:=RSP-8
+    subi rsp, rsp, 8, dataSize=8
+    #MEM[SS:RSP]:=holdRSP
+    st t6, ss, [1, t0, rsp], dataSize=8, addressSize=8
+    #RSP:=RSP-8
+    subi rsp, rsp, 8, dataSize=8
+    #MEM[SS:RSP]:=RFLAGS
+    st t10, ss, [1, t0, rsp], dataSize=8, addressSize=8
+    #RSP:=RSP-8
+    
+    subi rsp, rsp, 8, dataSize=8
+    #MEM[SS:RSP]:=RIP
+    st t7, ss, [1, t0, rsp], dataSize=8, addressSize=8
+    #RSP:=RSP-8; align by 16 byte again
+    subi rsp, rsp, 8, dataSize=8
+
+    #RIP:=UIHANDLER
+    rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8
+    wripi t1, 0, dataSize=8
+
+    eret
+    %(startLabel)s_end:
+    eret
+};
+"""
+
 microcode = (
     intCodeTemplate
     % {
@@ -581,6 +655,16 @@ microcode = (
     + userPciCodeTemplate
     % {
         "startLabel": "longModeUserPciWithError",
+        "gateCheckType": "IntGateCheck",
+        "errorCodeSize": 8,
+        "add_pc_change": "",
+        "errorCodeCode": """
+    st t15, hs, [1, t0, t6], dataSize=8, addressSize=8
+    """,
+    }
+    + userPageFaultCodeTemplate
+    % {
+        "startLabel": "longModeUserPageFaultWithError",
         "gateCheckType": "IntGateCheck",
         "errorCodeSize": 8,
         "add_pc_change": "",

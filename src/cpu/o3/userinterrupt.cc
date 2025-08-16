@@ -52,7 +52,7 @@ namespace gem5
 
         void UserInterruptProcessor::setInterrupt(Fault userInt, uint64_t vector, Addr pc)
         {
-            DPRINTF(UserInterrupt, "User Interrupt arrived\n");
+            DPRINTF(UserInterrupt, "[userinterrupt] Setting UINTR\n");
             cpu->userIntAtLeastOnce = true;
             cpu->userInterruptInfoUpdate(userInt);
             arrival++;
@@ -66,7 +66,7 @@ namespace gem5
 
         void UserInterruptProcessor::setInterrupt(Addr pc)
         {
-            DPRINTF(UserInterrupt, "User Interrupt updates pc, RIP:%#x\n", pc);
+            DPRINTF(UserInterrupt, "[userinterrupt] User Interrupt updates only pc, RIP:%#x\n", pc);
             cpu->userIntAtLeastOnce = true;
 
             returnPC = pc;
@@ -74,7 +74,7 @@ namespace gem5
 
         void UserInterruptProcessor::resetInterrupt()
         {
-            DPRINTF(UserInterrupt, "User Interrupt can retire in peace; vector: %d, RIP:%#x\n", vector, returnPC);
+            DPRINTF(UserInterrupt, "[userinterrupt] User Interrupt can retire in peace; vector: %d, RIP:%#x\n", vector, returnPC);
             cpu->setMiscRegNoEffect(X86ISA::misc_reg::UintrOngoing, 0, 0);
             cpu->userIntAtLeastOnce = true;
             retire++;
@@ -86,6 +86,7 @@ namespace gem5
         }
         std::unique_ptr<PCStateBase> UserInterruptProcessor::processInterrupt()
         {
+            DPRINTF(UserInterrupt, "[userinterrupt] Start processing User Interrupt\n");
             cpu->userIntAtLeastOnce = true;
 
             std::unique_ptr<PCStateBase> oldpc(cpu->pcState(0).clone());
@@ -99,10 +100,33 @@ namespace gem5
             // tempPC->as<X86ISA::PCState>().pc(returnPC);
             // cpu->pcState(*tempPC, 0);
 
-            DPRINTF(UserInterrupt, "User Interrupt fetch starts with vector: %d, RIP:%#x\n", vector, returnPC);
+            DPRINTF(UserInterrupt, "[userinterrupt] User Interrupt fetch starts with vector: %d, RIP:%#x\n", vector, returnPC);
             // cpu->processInterrupts(userInt);
             // reinterpret_cast<X86ISA::Interrupts *>(cpu->getInterruptController(0))->setReg(X86ISA::APIC_EOI, 1, 0);
+            DPRINTF(UserInterrupt, "[userinterrupt] userInt dynamic type: %s\n", typeid(userInt).name());
+
+            //cpu->setMiscReg(X86ISA::misc_reg::UintrTemp, 0, 0);
+            //cpu->setMiscReg(X86ISA::misc_reg::UintrScratch, 0, 0);
+            /*for (int i = 0; i < cpu->numThreads; ++i) {
+                auto* tc = cpu->getContext(i);
+                tc->setMiscRegNoEffect(X86ISA::misc_reg::UintrTemp, 0);
+                tc->setMiscRegNoEffect(X86ISA::misc_reg::UintrScratch, 0);
+                DPRINTF(UserInterrupt, "[userinterrupts] Reset MSRs on core %d\n", cpu->cpuId());
+            }*/
+
             cpu->trap(userInt, 0, nullptr);
+
+            /*for (int i = 0; i < cpu->numThreads; ++i) {
+                auto* tc = cpu->getContext(i);
+                uint64_t tmp = tc->readMiscRegNoEffect(X86ISA::misc_reg::UintrTemp);
+                uint64_t scrtch = tc->readMiscRegNoEffect(X86ISA::misc_reg::UintrScratch);
+                DPRINTF(UserInterrupt, "[userinterrupt] [tid %d, core %d] UintrTemp: %#016llx, UintrScratch: %#016llx\n", i, cpu->cpuId(), tmp, scrtch);
+                DPRINTF(UserInterrupt, "[userinterrupt] Uintr Frame: PC=0x%016lx, RFLAGS=0x%016lx, RSP=0x%016lx\n",
+                    tc->readMiscReg(X86ISA::misc_reg::UintrPciPC),
+                    tc->readMiscReg(X86ISA::misc_reg::UintrPciRFLAGS),
+                    tc->readMiscReg(X86ISA::misc_reg::UintrPciRSP));
+            }            
+            */
             cpu->thread[0]->noSquashFromTC = squashSituation;
             issue = false;
             ongoing = true;
@@ -123,7 +147,7 @@ namespace gem5
         }
         void UserInterruptProcessor::freeze()
         {
-            DPRINTF(UserInterrupt, "Freezing user interrupt, there is another interrupt and we have not committed.\n");
+            DPRINTF(UserInterrupt, "[userinterrupt] Freezing user interrupt, there is another interrupt and we have not committed.\n");
             // we need to be waiting for boundary if we have already sent the interrupt we cannot
             // freeze.
 
@@ -139,7 +163,7 @@ namespace gem5
 
         void UserInterruptProcessor::unFreeze()
         {
-            DPRINTF(UserInterrupt, "Unfreezing user interrupt, waiting for next instruction.\n");
+            DPRINTF(UserInterrupt, "[userinterrupt] Unfreezing user interrupt, waiting for next instruction.\n");
             // an unfreeze cannot happen for an ongoing interrupt that is big boo-boo
 
             frozen = false;

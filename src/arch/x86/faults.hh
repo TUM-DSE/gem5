@@ -84,6 +84,8 @@ class X86FaultBase : public FaultBase
      * @return interrupt vector number.
      */
     virtual uint8_t getVector() const { return vector; }
+
+    virtual uint64_t getErrorCode() const { return errorCode; }
 };
 
 // Base class for x86 faults which behave as if the underlying instruction
@@ -167,6 +169,7 @@ class UnimpInstFault : public FaultBase
 //                    20-29     Reserved
 //Contrib   ?         30        Security Exception                    #SX
 //                    31        Reserved
+// Either    Interrupt 41        Userfaultfd Page-Fault               #UPF
 //Benign    Interrupt 0-255     External Interrupts                   #INTR
 //Benign    Interrupt 0-255     Software Interrupts                   INTn
 
@@ -297,6 +300,9 @@ class PageFault : public X86Fault
                 nullStaticInstPtr);
 
     virtual std::string describe() const;
+
+    Addr getAddr() const { return addr; }
+    uint64_t getErrorCode() const { return errorCode; }
 };
 
 class X87FpExceptionPending : public X86Fault
@@ -419,6 +425,57 @@ class UserPci : public X86Interrupt
       interrupt_controller = _interrupt_controller;
       userInt = true;
     }
+
+    void invoke(ThreadContext *tc, const StaticInstPtr &inst =
+                                        nullStaticInstPtr) override;
+};
+class UserPageFaultForward : public X86Interrupt
+{
+  private:
+    Interrupts *interrupt_controller;
+
+  public:
+    UserPageFaultForward(uint8_t _vector, Interrupts *_interrupt_controller) : X86Interrupt("User Page Fault Foward", "#UPFF", _vector)
+    {
+      interrupt_controller = _interrupt_controller;
+      userInt = true;
+    }
+
+    void invoke(ThreadContext *tc, const StaticInstPtr &inst =
+                                        nullStaticInstPtr) override;
+};
+class UserPageFault : public X86Fault
+{
+  protected:
+    BitUnion32(PageFaultErrorCode)
+        Bitfield<0> present;
+        Bitfield<1> write;
+        Bitfield<2> user;
+        Bitfield<3> reserved;
+        Bitfield<4> fetch;
+    EndBitUnion(PageFaultErrorCode)
+
+    Addr addr;
+
+  public:
+    UserPageFault(Addr _addr, uint32_t _errorCode) : 
+        X86Fault("User Page Fault", "#UPF", 14, _errorCode), addr(_addr)
+    {}
+
+    UserPageFault(Addr _addr, bool present, BaseMMU::Mode mode,
+                  bool user, bool reserved)
+        : X86Fault("User Page Fault", "#UPF", 14, 0), addr(_addr)
+    {
+        PageFaultErrorCode code = 0;
+        code.present = present;
+        code.write = (mode == BaseMMU::Write);
+        code.user = user;
+        code.reserved = reserved;
+        code.fetch = (mode == BaseMMU::Execute);
+        errorCode = code;
+    }
+
+    Addr getAddr() const { return addr; }
 
     void invoke(ThreadContext *tc, const StaticInstPtr &inst =
                                         nullStaticInstPtr) override;

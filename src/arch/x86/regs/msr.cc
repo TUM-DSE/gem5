@@ -135,6 +135,10 @@ const MsrMap::value_type msrMapData[] = {
     MsrVal(0x99A, misc_reg::UintrPciConsumed),
     MsrVal(0x99B, misc_reg::UintrPciDisable),
     MsrVal(0x99C, misc_reg::UintrPciEarlyExit),
+    MsrVal(0x99D, misc_reg::UintrTemp),
+    MsrVal(0x99E, misc_reg::UintrScratch),
+    MsrVal(0x99F, misc_reg::UintrPageFaultForwardAddr),
+    MsrVal(0x9A0, misc_reg::UintrPageFaultErrorCode),
 
     MsrVal(0xC0000080, misc_reg::Efer),
     MsrVal(0xC0000081, misc_reg::Star),

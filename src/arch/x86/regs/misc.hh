@@ -275,6 +275,10 @@ enum : RegIndex
     UintrPciConsumed,
     UintrPciDisable,
     UintrPciEarlyExit,
+    UintrTemp,
+    UintrScratch,
+    UintrPageFaultForwardAddr,
+    UintrPageFaultErrorCode,
     UintrEnd,
 
     /*MsrVal(0x985, misc_reg::UintrRR),
@@ -907,6 +911,18 @@ BitUnion64(Efer)
     Bitfield<12> svme; // Secure virtual machine enable
     Bitfield<14> ffxsr; // Fast fxsave/fxrstor
 EndBitUnion(Efer)
+
+BitUnion64(UintrTemp)
+EndBitUnion(UintrTemp)
+
+BitUnion64(UintrScratch)
+EndBitUnion(UintrScratch)
+
+BitUnion64(UintrPageFaultForwardAddr)
+EndBitUnion(UintrPageFaultForwardAddr)
+
+BitUnion64(UintrPageFaultErrorCode)
+EndBitUnion(UintrPageFaultErrorCode)
 
 BitUnion64(Star)
     Bitfield<31,0> targetEip;

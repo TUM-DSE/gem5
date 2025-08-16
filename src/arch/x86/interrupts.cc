@@ -245,10 +245,15 @@ X86ISA::Interrupts::requestInterrupt(uint8_t vector,
         // Queue up the interrupt in the IRR.
         DPRINTF(LocalApic, "IRRV: %d, new vector: %d\n", IRRV, vector);
         if (!tc->getCpuPtr()->isKvm) {
+            DPRINTF(UserInterrupt, "[interrupts] Entered requestInterrupt\n");
             UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
             UintrTimerStatus uintrTimerStatus = tc->readMiscRegNoEffect(misc_reg::UintrTimerStatus);
 
             UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
+            DPRINTF(UserInterrupt, "[interrupts] UintrMisc.uinv: %#x, uif: %d\n", uintrMisc.uinv, uintrMisc.uif);
+            DPRINTF(UserInterrupt, "[interrupts] UintrTimerStatus.uinv: %#x, timer_on: %d, timer_active: %d\n", uintrTimerStatus.uinv, uintrTimerStatus.timer_on, uintrTimerStatus.timer_active);
+            DPRINTF(UserInterrupt, "[interrupts] UintrPciDisable: %#lx\n", static_cast<uint64_t>(uintrPciDisable));
+
             if (vector == 37) {
                 if (auxPending == 0) {
                     userPciTimeStart = curTick();
@@ -256,7 +261,9 @@ X86ISA::Interrupts::requestInterrupt(uint8_t vector,
                 if (!uintrPciDisable) {
                     auxPending++;
                     if (!tc->getCpuPtr()->isKvm && LoadGenerator::switched && auxPending) {
+                        DPRINTF(UserInterrupt, "[interrupts] Not KVM, LoadGenerator switched and auxPending\n");
                         if (!pendingEvent.scheduled()) {
+                            DPRINTF(UserInterrupt, "[interrupts] Schedule event\n");
                             schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
                         }
                     }
@@ -269,8 +276,17 @@ X86ISA::Interrupts::requestInterrupt(uint8_t vector,
                     tc->getCpuPtr()->wakeup(0);
                 return;
             }
+            // page fault forwarding
+            if (vector == 14) {
+                printf("[interrupts] requested interrupt for PF on another core\n");
+                schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
+
+                if (FullSystem)
+                    tc->getCpuPtr()->wakeup(0);
+                return;
+            }
             if (vector == uintrMisc.uinv || vector == uintrTimerStatus.uinv) {
-                DPRINTF(UserInterrupt, "IRRVUSER set %d", vector);
+                DPRINTF(UserInterrupt, "[interrupts] IRRVUSER set %d", vector);
                 IRRVUSER = vector;
                 if (FullSystem)
                     tc->getCpuPtr()->wakeup(0);
@@ -397,6 +413,7 @@ X86ISA::Interrupts::recvMessage(PacketPtr pkt)
                     message.vector);
             UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
             if (message.vector == uintrMisc.uinv && message.vector) {
+                DPRINTF(UserInterrupt, "[interrupts] Setting CPU waitingForRecv flag\n");
                 // reinterpret_cast<o3::CPU *>(pkt->cpu)->sendUipiSent();
                 reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->sendUipiRegister(pkt->tick);
             }
@@ -689,6 +706,7 @@ X86ISA::Interrupts::Interrupts(const Params &p)
       apicTimerEvent([this]{ processApicTimerEvent(); }, name()),
       pendingEvent([this]{ processPendingEvent(); }, name()),
       unlockEvent([this]{ processUnlockEvent(); }, name()),
+      pageFaultEvent([this]{ processPageFaultEvent(); }, name()),
       intResponsePort(name() + ".int_responder", this, this),
       intRequestPort(name() + ".int_requestor", this, this, p.int_latency),
       lint0Pin(name() + ".lint0", 0, this, 0),
@@ -719,18 +737,23 @@ X86ISA::Interrupts::Interrupts(const Params &p)
 bool
 X86ISA::Interrupts::checkInterrupts()
 {
+    //DPRINTF(UserInterrupt, "[interrupts] Entered checkInterrupts\n");
     RFLAGS rflags = tc->readMiscRegNoEffect(misc_reg::Rflags);
     if (pendingUnmaskableInt) {
         DPRINTF(LocalApic, "Reported pending unmaskable interrupt.\n");
-        if (ISRVUSER)
+        if (ISRVUSER) {
+            DPRINTF(UserInterrupt, "[interrupts] pending unmaskable -> error\n");
             return false;
+        }
         return true;
     }
     if (rflags.intf) {
         if (pendingExtInt) {
             DPRINTF(LocalApic, "Reported pending external interrupt.\n");
-            if (ISRVUSER)
+            if (ISRVUSER) {
+                DPRINTF(UserInterrupt, "[interrupts] pending external -> error\n");
                 return false;
+            }
             return true;
         }
         if (ISRVUSER) {
@@ -740,9 +763,12 @@ X86ISA::Interrupts::checkInterrupts()
         UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
         UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
         if (!uintrPciON && !uintrPciDisable) {
+            //DPRINTF(UserInterrupt, "[interrupts] UINTR Pci not on but enabled\n");
             UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
             if (curTick() > userPciTimeStart + userPciTimeout && (uintrPciPending + auxPending) > 0) {
+                DPRINTF(UserInterrupt, "[interrupts] ...UINTR pending\n");
                 if (!pendingEvent.scheduled()) {
+                    DPRINTF(UserInterrupt, "[interrupts] ...and not scheduled\n");
                     schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
                 }
             }
@@ -752,26 +778,35 @@ X86ISA::Interrupts::checkInterrupts()
             DPRINTF(LocalApic, "Reported pending regular interrupt.\n");
             return true;
         }
-        if (IRRVUSER && !ISRV) {
+        if (IRRVUSER && !ISRV) { // is UINTR and no current interrupt service
             UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
             UintrTimerStatus uintrTimerStatus = tc->readMiscRegNoEffect(misc_reg::UintrTimerStatus);
             X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(X86ISA::misc_reg::M5Reg);
+
+            if (m5reg.cpl && IRRVUSER == 14) { // already checked rflags and uif in commitHead
+                DPRINTF(UserInterrupt, "[interrupts] Pending page fault");
+                return true;
+            }
+
             if (m5reg.cpl && uintrMisc.uif && uintrTimerStatus.timer_on && uintrTimerStatus.timer_active && IRRVUSER == uintrTimerStatus.uinv) // magic number
             {
                 DPRINTF(LocalApic, "Reported pending user timer.\n");
-                DPRINTF(UserInterrupt, "user timer");
+                DPRINTF(UserInterrupt, "[interrupts] Pending user timer");
                 return true;
             }
             if (uintrTimerStatus.timer_on && uintrTimerStatus.timer_active && IRRVUSER == uintrTimerStatus.uinv) {
+                DPRINTF(UserInterrupt, "[interrupts] Pending user timer, but not in user mode or UINTR disabled\n");
                 return false;
             }
             if (m5reg.cpl && IRRVUSER == uintrMisc.uinv && uintrMisc.uif) {
                 // std::cerr << "DO COME\n";
                 DPRINTF(LocalApic, "Reported pending user interrupt.\n");
+                DPRINTF(UserInterrupt, "[interrupts] Pending UINTR\n");
                 return true;
             }
             if (IRRVUSER == uintrMisc.uinv) {
                 // std::cerr << "UIF: " << (uintrMisc.uif ? "true" : "false") << " CPL: " << m5reg.cpl << std::endl;
+                DPRINTF(UserInterrupt, "[interrupts] Pending UINTR, but not in user mode or UINTR disabled\n");
                 return false;
             }
             UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
@@ -779,7 +814,7 @@ X86ISA::Interrupts::checkInterrupts()
             if (m5reg.cpl && IRRVUSER == 37 && uintrMisc.uif && uintrPciON && !uintrPciDisable) {
                 // std::cerr << "DO COME\n";
                 DPRINTF(LocalApic, "Reported pending user interrupt pci.\n");
-                DPRINTF(UserInterrupt, "user pci");
+                DPRINTF(UserInterrupt, "[interrupts] Pending UINTR pci\n");
                 return true;
             }
         }
@@ -798,10 +833,12 @@ X86ISA::Interrupts::checkInterruptsRaw() const
 Fault
 X86ISA::Interrupts::getInterrupt()
 {
+    //DPRINTF(UserInterrupt, "[interrupts] Entered getInterrupt\n");
     assert(checkInterrupts());
     // These are all probably fairly uncommon, so we'll make them easier to
     // check for.
     if (pendingUnmaskableInt) {
+        DPRINTF(UserInterrupt, "[interrupts] first branch -> pending unmaskable\n");
         if (pendingSmi) {
             DPRINTF(LocalApic, "Generated SMI fault object.\n");
             return std::make_shared<SystemManagementInterrupt>();
@@ -820,28 +857,38 @@ X86ISA::Interrupts::getInterrupt()
             return NoFault;
         }
     } else if (pendingExtInt) {
+        DPRINTF(UserInterrupt, "[interrupts] second branch -> pending external\n");
         DPRINTF(LocalApic, "Generated external interrupt fault object.\n");
         return std::make_shared<ExternalInterrupt>(extIntVector);
     } else {
+        DPRINTF(UserInterrupt, "[interrupts] third branch -> other\n");
         if (IRRV > ISRV && bits(IRRV, 7, 4) >
                               bits(regs[APIC_TASK_PRIORITY], 7, 4)) {
             DPRINTF(LocalApic, "Generated regular interrupt fault object.\n");
+            DPRINTF(UserInterrupt, "[interrupts] Generated regular interrupt fault object.\n");
             // The only thing left are fixed and lowest priority interrupts.
             return std::make_shared<ExternalInterrupt>(IRRV);
         }
         UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
 
         if (IRRVUSER == 36) { // magic number
+            DPRINTF(UserInterrupt, "[interrupts] Generated user timer fault object.\n");
             DPRINTF(LocalApic, "Generated user timer fault object.\n");
             return std::make_shared<UserTimer>(IRRVUSER, this);
         }
         if (IRRVUSER == uintrMisc.uinv) {
+            DPRINTF(UserInterrupt, "[interrupts] Generated user interrupt fault object.\n");
             DPRINTF(LocalApic, "Generated user interrupt fault object.\n");
             return std::make_shared<UserInterrupt>(IRRVUSER, this);
         }
         if (IRRVUSER == 37) {
+            DPRINTF(UserInterrupt, "[interrupts] Generated user pci fault object.\n");
             DPRINTF(LocalApic, "Generated user pci fault object.\n");
             return std::make_shared<UserPci>(IRRVUSER, this);
+        }
+        if (IRRVUSER == 14) {
+            DPRINTF(UserInterrupt, "[interrupts] Generated user page fault forward object.\n");
+            return std::make_shared<UserPageFaultForward>(IRRVUSER, this);
         }
     }
 }
@@ -872,6 +919,7 @@ X86ISA::Interrupts::updateIntrInfo(const Fault &interrupt)
         pendingExtInt = false;
     } else {
         if (interrupt->userInt) {
+            DPRINTF(UserInterrupt, "[interrupts] passing through updateIntrInfo\n");
             ISRVUSER = IRRVUSER;
             IRRVUSER = 0; // TODO NOT MORE THAN ONE VECTOR CAN BE DONE
             return;
@@ -994,8 +1042,19 @@ X86ISA::Interrupts::processApicTimerEvent()
 }
 
 void
+X86ISA::Interrupts::processPageFaultEvent()
+{
+    DPRINTF(UserInterrupt, "[interrupts] Entered processPageFaultEvent\n");
+
+    IRRVUSER = 14;
+    if (FullSystem)
+        tc->getCpuPtr()->wakeup(0);
+}
+
+void
 X86ISA::Interrupts::processPendingEvent()
 {
+    DPRINTF(UserInterrupt, "[interrupts] Entered processPendingEvent\n");
     UintrPciLock uintrPciLock = tc->readMiscRegNoEffect(misc_reg::UintrPciLock);
     if (!uintrPciLock && !unlockEvent.scheduled()) {
         reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciLock, 2, tc->threadId()); // acquire lock
@@ -1005,7 +1064,7 @@ X86ISA::Interrupts::processPendingEvent()
         if (!uintrPciON && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
             uintrPciPending = totalPending;
             auxPending = 0;
-            DPRINTF(UserInterrupt, "IRRVUSER set PCI");
+            DPRINTF(UserInterrupt, "[interrupts] IRRVUSER set PCI");
             IRRVUSER = 37;
             if (FullSystem)
                 tc->getCpuPtr()->wakeup(0);
@@ -1015,6 +1074,7 @@ X86ISA::Interrupts::processPendingEvent()
         reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciPending, uintrPciPending, tc->threadId());
         schedule(unlockEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(2)));
     } else {
+        DPRINTF(UserInterrupt, "[interrupts] else-branch -> lock held or unlockEvent scheduled\n");
         schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(1)));
     }
 }
@@ -1024,9 +1084,11 @@ X86ISA::Interrupts::processUnlockEvent()
 {
     UintrPciLock uintrPciLock = tc->readMiscRegNoEffect(misc_reg::UintrPciLock);
     if (uintrPciLock == 1) {
+        DPRINTF(UserInterrupt, "[interrupts] Locked, but do not unlock\n");
         return;
     }
     assert(uintrPciLock);
+    DPRINTF(UserInterrupt, "[interrupts] unlocking...\n");
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciLock, 0, tc->threadId());
 }
 

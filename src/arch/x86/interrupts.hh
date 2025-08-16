@@ -138,6 +138,9 @@ class Interrupts : public BaseInterrupts
     EventFunctionWrapper unlockEvent;
     void processUnlockEvent();
 
+    EventFunctionWrapper pageFaultEvent;
+    void processPageFaultEvent();
+
     int
     findRegArrayMSB(ApicRegIndex base)
     {

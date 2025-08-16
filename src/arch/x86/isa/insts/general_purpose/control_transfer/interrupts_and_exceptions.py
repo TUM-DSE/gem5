@@ -362,6 +362,9 @@ def macroop CLUI {
     wrval ctrlRegIdx("misc_reg::UintrMisc"), t1
 };
 def macroop UIRET {
+    limm t9, 0xFEEDFEEDFEEDFEED, dataSize=8
+    wrval ctrlRegIdx("misc_reg::UintrTemp"), t9, dataSize=8
+
     # if PciON=1
     rdval t1, ctrlRegIdx("misc_reg::UintrPciON"),dataSize=8
     andi t0, t1, 1,dataSize=8, flags=(ZF,)
@@ -461,6 +464,9 @@ def macroop UIRET {
 };
 
 def macroop SENDUIPI_R {
+    limm t9, 0xCAFECAFECAFECAFE, dataSize=8
+    wrval ctrlRegIdx("misc_reg::UintrScratch"), t9, dataSize=8
+
     #if reg > UITTSZ
     rdval t1, ctrlRegIdx("misc_reg::UintrMisc")
     limm t3, 0xffffffff, dataSize=8

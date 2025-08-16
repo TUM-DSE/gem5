@@ -937,12 +937,12 @@ Fetch::tick()
 
     if (FullSystem) {
         if (fromCommit->commitInfo[0].interruptPending) {
-            DPRINTF(UserInterrupt, "pending\n");
+            DPRINTF(UserInterrupt, "[fetch] User Interrupt pending\n");
             interruptPending = true;
         }
 
         if (fromCommit->commitInfo[0].clearInterrupt) {
-            DPRINTF(UserInterrupt, "not pending anymore\n");
+            DPRINTF(UserInterrupt, "[fetch] User Interrupt not pending anymore\n");
             interruptPending = false;
         }
     }
@@ -960,22 +960,23 @@ Fetch::tick()
             if (!interrupt->userInt) {
                 interruptNotUser = true;
             }
+            DPRINTF(UserInterrupt, "[fetch] interruptNotUser: %d\n", interruptNotUser);
         }
         X86ISA::HandyM5Reg m5reg = cpu->readMiscRegNoEffect(X86ISA::misc_reg::M5Reg, 0);
 
         if ((interruptNotUser || interruptPending || !m5reg.cpl || !userInterruptProcessor.checkFlags()) && !userInterruptProcessor.isFrozen()) {
             // freeze only if we are not (processing an interrupt or we are just about to process one).
             if (interruptNotUser) {
-                DPRINTF(UserInterrupt, "interruptNotUser\n");
+                DPRINTF(UserInterrupt, "[fetch] interruptNotUser -> freeze\n");
             }
             if (interruptPending) {
-                DPRINTF(UserInterrupt, "interruptPending\n");
+                DPRINTF(UserInterrupt, "[fetch] interruptPending -> freeze\n");
             }
             if (!m5reg.cpl) {
-                DPRINTF(UserInterrupt, "cpl0\n");
+                DPRINTF(UserInterrupt, "[fetch] cpl0\n");
             }
             if (!userInterruptProcessor.checkFlags()) {
-                DPRINTF(UserInterrupt, "flags\n");
+                DPRINTF(UserInterrupt, "[fetch] flags\n");
             }
             userInterruptProcessor.freeze();
         }
@@ -1001,7 +1002,7 @@ Fetch::tick()
         if (userInterruptProcessor.checkInterrupt() && cpu->checkInterrupts(0)) {
             Fault interrupt = cpu->getInterrupts();
             if (interrupt->userInt) {
-                // DPRINTF(UserInterrupt, "Another user interrupt arrived but we haven't finished the other yet\n");
+                DPRINTF(UserInterrupt, "[fetch] Another user interrupt arrived but we haven't finished the other yet\n");
             }
         }
         if (userInterruptProcessor.checkInterruptReady() && userInterruptProcessor.pcUsable) {
