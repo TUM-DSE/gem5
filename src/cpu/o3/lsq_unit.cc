@@ -734,6 +734,16 @@ LSQUnit::commitLoad()
                     inst->lastWakeDependents - inst->firstIssue));
     }
 
+    // If this load was stalling due to a partial store-load overlap, clear
+    // the stall before nulling the entry. Without this, a fault-committed
+    // load leaves a dangling stallingLoadIdx that causes a null-deref in
+    // storePostSend/completeStore when the blocking store later completes.
+    if (isStalled() && loadQueue.head() == stallingLoadIdx) {
+        stalled = false;
+        stallingStoreIsn = 0;
+        stallingLoadIdx = 0;
+    }
+
     loadQueue.front().clear();
     loadQueue.pop_front();
 }

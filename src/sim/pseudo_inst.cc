@@ -385,20 +385,20 @@ resetstats(ThreadContext *tc, Tick delay, Tick period)
         LoadGenerator::stopCounting = LoadGenerator::endTick - 500 * (period);
     }
     if (delay == 51) {
-        Accelerator::latency_file << period << std::endl;
+        //Accelerator::latency_file << period << std::endl;
     }
     if (delay == 52) {
-        LoadGenerator::latencies << "===" << std::endl;
-        LoadGenerator::latencies << "Background cycles: " << period << std::endl;
+        //LoadGenerator::latencies << "===" << std::endl;
+        //LoadGenerator::latencies << "Background cycles: " << period << std::endl;
     }
     if (delay == 53) {
-        LoadGenerator::latencies << "Network cycles: " << period << std::endl;
+        //LoadGenerator::latencies << "Network cycles: " << period << std::endl;
     }
     if (delay == 54) {
-        LoadGenerator::latencies << "Poll cycles: " << period << std::endl;
+        //LoadGenerator::latencies << "Poll cycles: " << period << std::endl;
     }
     if (delay == 55) {
-        LoadGenerator::latencies << "Forwarded packets: " << period << std::endl;
+        //LoadGenerator::latencies << "Forwarded packets: " << period << std::endl;
     }
     DPRINTF(PseudoInst, "pseudo_inst::resetstats(%i, %i)\n", delay, period);
     /*if (!tc->getCpuPtr()->params().do_statistics_insts)

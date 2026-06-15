@@ -13,7 +13,7 @@
 namespace gem5
 {
     std::vector<LoadGenerator *> LoadGenerator::self = {};
-    std::ofstream LoadGenerator::latencies = std::ofstream("latency.txt", std::ofstream::out | std::ofstream::trunc);
+    //std::ofstream LoadGenerator::latencies = std::ofstream("latency.txt", std::ofstream::out | std::ofstream::trunc);
     LoadGenerator::LoadGeneratorStats::LoadGeneratorStats(statistics::Group *parent)
         : statistics::Group(parent, "LoadGenerator"),
           ADD_STAT(sentPackets, statistics::units::Count::get(), "Number of Generated Packets"),
@@ -209,9 +209,9 @@ namespace gem5
             lastRxCount++;
             loadGeneratorStats.recvPackets++;
 	
-			latencies << std::flush;
-            latencies << delta << std::endl;
-			latencies << std::flush;
+			//latencies << std::flush;
+            //latencies << delta << std::endl;
+			//latencies << std::flush;
         }
         // std::open(); packets
 

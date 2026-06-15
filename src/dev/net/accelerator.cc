@@ -11,7 +11,7 @@
 namespace gem5
 {
     Accelerator *Accelerator::self = nullptr;
-    std::ofstream Accelerator::latency_file("accel_latency");
+    //std::ofstream Accelerator::latency_file("accel_latency");
     Accelerator::AcceleratorStats::AcceleratorStats(statistics::Group *parent)
         : statistics::Group(parent, "Accelerator"),
           ADD_STAT(sentPackets, statistics::units::Count::get(), "Number of Generated Packets"),

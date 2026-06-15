@@ -471,7 +471,8 @@ X86ISA::Interrupts::readReg(ApicRegIndex reg)
 {
     if (reg >= APIC_TRIGGER_MODE(0) &&
             reg <= APIC_TRIGGER_MODE(15)) {
-        panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        //panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        return 0;
     }
     switch (reg) {
       case APIC_ARBITRATION_PRIORITY:
@@ -514,7 +515,8 @@ X86ISA::Interrupts::setReg(ApicRegIndex reg, uint32_t val, Tick tick)
     }
     if (reg >= APIC_TRIGGER_MODE(0) &&
             reg <= APIC_TRIGGER_MODE(15)) {
-        panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        //panic("Local APIC Trigger Mode registers are unimplemented.\n");
+        return;
     }
     if (reg >= APIC_INTERRUPT_REQUEST(0) &&
             reg <= APIC_INTERRUPT_REQUEST(15)) {

@@ -370,7 +370,12 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
         entry.user = entry.user && pte.u;
         if (badNX || !pte.p) {
             doEndWalk = true;
-            fault = pageFault(pte.p);
+            constexpr uint64_t UPF_BIT = (1ULL << 58);
+            if (!pte.p && !badNX && ((uint64_t)pte & UPF_BIT))
+                fault = std::make_shared<X86ISA::UserPageFault>(
+                            entry.vaddr, 0);
+            else
+                fault = pageFault(pte.p);
             break;
         }
         entry.paddr = mbits(pte, 51, 12);

@@ -134,7 +134,6 @@ CopyEngine::getPort(const std::string &if_name, PortID idx)
 Port &
 CopyEngine::CopyEngineChannel::getPort()
 {
-    std::cerr << "Here comes the port durururu\n";
     return cePort;
 }
 

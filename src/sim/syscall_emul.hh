@@ -110,7 +110,6 @@
 #include "sim/syscall_return.hh"
 
 #include "debug/Faults.hh"
-#include "mem/uffd_region_tracker.hh"
 #include <linux/userfaultfd.h>
 
 #if defined(__APPLE__) && defined(__MACH__) && !defined(CMSG_ALIGN)
@@ -702,17 +701,9 @@ ioctlFunc(SyscallDesc *desc, ThreadContext *tc,
         Addr start = ureg->range.start;
         Addr end = start + ureg->range.len;
 
-        UffdRegionTracker::get().addRegion(start, end);
     }
     if (req == UFFDIO_UNREGISTER) {
         DPRINTF(Faults, "[syscall_emul] IOCTL with UFFDIO_UNREGISTER\n");
-
-        BufferArg unreg_arg(addr, sizeof(uffdio_range));
-        unreg_arg.copyIn(SETranslatingPortProxy(tc));
-
-        uffdio_range *urange = (uffdio_range*)unreg_arg.bufferPtr();
-
-        gem5::UffdRegionTracker::get().removeRegion(urange->start, urange->start + urange->len);
     }
     auto p = tc->getProcessPtr();
 

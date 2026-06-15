@@ -444,6 +444,9 @@ class UserPageFaultForward : public X86Interrupt
     void invoke(ThreadContext *tc, const StaticInstPtr &inst =
                                         nullStaticInstPtr) override;
 };
+// Raised by the page-table walker when a non-present PTE has the UPF marker
+// bit set (bit 58). commit.cc delivers it via UINTR when UIF and IF are set,
+// or downgrades it to a plain PageFault otherwise.
 class UserPageFault : public X86Fault
 {
   protected:

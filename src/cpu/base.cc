@@ -273,10 +273,11 @@ BaseCPU::mwait(ThreadID tid, PacketPtr pkt)
     AddressMonitor &monitor = addressMonitor[tid];
 
     if (!monitor.gotWakeup) {
+        if (!pkt || !pkt->req || !pkt->req->hasPaddr()) {
+            return false;
+        }
         int block_size = cacheLineSize();
         uint64_t mask = ~((uint64_t)(block_size - 1));
-
-        assert(pkt->req->hasPaddr());
         monitor.pAddr = pkt->getAddr() & mask;
         monitor.waiting = true;
 
@@ -693,6 +694,10 @@ BaseCPU::takeOverFrom(BaseCPU *oldCPU)
     // ports are dangling while the old CPU has its ports connected
     // already. Unbind the old CPU and then bind the ports of the one
     // we are switching to.
+    for (ThreadID tid = 0; tid < numThreads; tid++) {
+        addressMonitor[tid] = oldCPU->addressMonitor[tid];
+    }
+
     getInstPort().takeOverFrom(&oldCPU->getInstPort());
     getDataPort().takeOverFrom(&oldCPU->getDataPort());
 

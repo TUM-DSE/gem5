@@ -279,7 +279,11 @@ X86ISA::I82094AA::signalInterrupt(TriggerIntMessage message)
     DPRINTF(UserInterrupt, "[i82094aa] Sending to all local APICs\n");
     for (auto id: apics) {
         PacketPtr pkt = buildIntTriggerPacket(id, message);
-        intRequestPort.sendMessage(pkt, sys->isTimingMode());
+        // Force atomic delivery so cross-vCPU interrupt injection via
+        // pthread_kill fires immediately during the triggering KVM exit,
+        // rather than deferring to a future event that may never run while
+        // other vCPUs hold KVM_RUN.
+        intRequestPort.sendMessage(pkt, false);
     }
 }
 

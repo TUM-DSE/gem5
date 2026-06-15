@@ -85,7 +85,7 @@ namespace gem5
         static Accelerator *self;
         std::ofstream latencies;
         Accelerator(const AcceleratorParams &p);
-        static std::ofstream latency_file;
+        //static std::ofstream latency_file;
 
         Port &getPort(const std::string &if_name, PortID idx);
         void buildPacket(EthPacketPtr ethpacket, uint64_t sendTick, uint64_t req_type = 0);

@@ -73,7 +73,7 @@
 
 #include "debug/Faults.hh"
 #include "arch/x86/faults.hh"
-#include "mem/uffd_region_tracker.hh"
+#include "mem/upf_stats.hh"
 
 namespace gem5
 {
@@ -491,7 +491,7 @@ Commit::generateTrapEvent(ThreadID tid, Fault inst_fault)
         "Trap", true, Event::CPU_Tick_Pri);
 
     Cycles latency = std::dynamic_pointer_cast<SyscallRetryFault>(inst_fault) ?
-                     cpu->syscallRetryLatency : trapLatency + Cycles(UffdStats::lastCheckCount * gem5::UFFD_REGION_CHECK_COST);
+                     cpu->syscallRetryLatency : trapLatency + Cycles(UpfStats::lastCheckCount * gem5::UPF_TRAP_COST);
 
     // hardware transactional memory
     if (inst_fault != nullptr &&
@@ -1525,37 +1525,26 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
         // needed to update the state as soon as possible.  This
         // prevents external agents from changing any specific state
         // that the trap need.
-        auto pf = std::dynamic_pointer_cast<X86ISA::PageFault>(inst_fault);
         Fault temp_fault = inst_fault;
-        
-        if (pf) {
-            UffdStats::lastCheckCount = 0;
-            Addr fault_addr = pf->getAddr();
-            uint64_t errorCode = pf->getErrorCode();
-            DPRINTF(Faults, "[commit] PageFault during commit: addr=0x%lx, errorCode=0x%" PRIx64 "\n",
-                    fault_addr, errorCode);
+        auto upf = std::dynamic_pointer_cast<X86ISA::UserPageFault>(inst_fault);
+        if (upf) {
+            Addr fault_addr = upf->getAddr();
+            uint64_t errorCode = upf->getErrorCode();
 
             auto* tc = cpu->getContext(tid);
             X86ISA::RFLAGS rflags = tc->readMiscRegNoEffect(X86ISA::misc_reg::Rflags);
             X86ISA::UintrMisc misc = tc->readMiscRegNoEffect(X86ISA::misc_reg::UintrMisc);
 
-            auto res = UffdRegionTracker::get().isBacked(fault_addr);
-            //cpu->cpuStats.numCycles += res.regions_checked * gem5::UFFD_REGION_CHECK_COST;
-            UffdStats::lastCheckCount = res.regions_checked;
-
-            bool is_uffd_backed = res.is_backed;
             bool uintr_enabled = misc.uif;
             bool rflags_set = rflags.intf;
 
-            printf("[commit] uffd-backed=%s, misc.uif=%s, rflags.intf=%s, error_code=0x%" PRIx64 ", addr=0x%" PRIx64 "\n",
-                    is_uffd_backed ? "true" : "false",
+            DPRINTF(Faults, "[commit] UffdPageFault: uif=%s IF=%s addr=0x%" PRIx64 "\n",
                     uintr_enabled ? "true" : "false",
                     rflags_set ? "true" : "false",
-                    errorCode,
-                    pf->getAddr());
-            if (is_uffd_backed && uintr_enabled && rflags_set) {
-                DPRINTF(Faults, "[commit] Start of interrupt forwarding for UserPageFault\n");
-                temp_fault = std::make_shared<X86ISA::UserPageFault>(fault_addr, errorCode);
+                    fault_addr);
+            if (!uintr_enabled || !rflags_set) {
+                DPRINTF(Faults, "[commit] downgrading UserPageFault to PageFault\n");
+                temp_fault = std::make_shared<X86ISA::PageFault>(fault_addr, (uint32_t)errorCode);
             }
         }
         cpu->trap(temp_fault, tid,
