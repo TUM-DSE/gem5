@@ -764,7 +764,7 @@ X86ISA::Interrupts::checkInterrupts()
         }
         UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
         UintrPciDisable uintrPciDisable = tc->readMiscRegNoEffect(misc_reg::UintrPciDisable);
-        if (!uintrPciON && !uintrPciDisable) {
+        if (!uintrPciON && !uintrPciDisable && LoadGenerator::switched) {
             //DPRINTF(UserInterrupt, "[interrupts] UINTR Pci not on but enabled\n");
             UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
             if (curTick() > userPciTimeStart + userPciTimeout && (uintrPciPending + auxPending) > 0) {
@@ -1063,7 +1063,7 @@ X86ISA::Interrupts::processPendingEvent()
         UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
         UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
         int64_t totalPending = auxPending + uintrPciPending;
-        if (!uintrPciON && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
+        if (!uintrPciON && LoadGenerator::switched && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
             uintrPciPending = totalPending;
             auxPending = 0;
             DPRINTF(UserInterrupt, "[interrupts] IRRVUSER set PCI");

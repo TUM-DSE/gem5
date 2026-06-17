@@ -554,7 +554,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     PCState pc = tc->pcState().as<PCState>();
     assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
 
-    DPRINTF(Faults, "RIP %#x: User page fault %d: %s\n", pc.pc(), vector, describe());
+    DPRINTF(UserInterrupt, "RIP %#x: User page fault %d: %s\n", pc.pc(), vector, describe());
 
     using namespace X86ISAInst::rom_labels;
     X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
