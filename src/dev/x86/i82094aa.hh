@@ -80,6 +80,9 @@ class I82094AA : public BasicPioDevice
 
     RedirTableEntry redirTable[TableSize];
     bool pinStates[TableSize];
+    // Latches a line that was asserted while its entry was masked, so it
+    // can be redelivered once unmasked instead of being silently dropped.
+    bool pendingMask[TableSize];
 
     std::vector<IntSinkPin<I82094AA> *> inputs;
 

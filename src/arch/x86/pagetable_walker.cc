@@ -59,6 +59,7 @@
 #include "base/trie.hh"
 #include "cpu/base.hh"
 #include "cpu/thread_context.hh"
+#include "debug/Faults.hh"
 #include "debug/PageTableWalker.hh"
 #include "mem/packet_access.hh"
 #include "mem/request.hh"
@@ -307,8 +308,6 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
       case LongPML4:
         DPRINTF(PageTableWalker, "Got long mode PML4 entry %#016x.\n", pte);
         nextRead = mbits(pte, 51, 12) + vaddr.longl3 * dataSize;
-        doWrite = !pte.a;
-        pte.a = 1;
         entry.writable = pte.w;
         entry.user = pte.u;
         if (badNX || !pte.p) {
@@ -316,14 +315,14 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
             fault = pageFault(pte.p);
             break;
         }
+        doWrite = !pte.a;
+        pte.a = 1;
         entry.noExec = pte.nx;
         nextState = LongPDP;
         break;
       case LongPDP:
         DPRINTF(PageTableWalker, "Got long mode PDP entry %#016x.\n", pte);
         nextRead = mbits(pte, 51, 12) + vaddr.longl2 * dataSize;
-        doWrite = !pte.a;
-        pte.a = 1;
         entry.writable = entry.writable && pte.w;
         entry.user = entry.user && pte.u;
         if (badNX || !pte.p) {
@@ -331,12 +330,12 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
             fault = pageFault(pte.p);
             break;
         }
+        doWrite = !pte.a;
+        pte.a = 1;
         nextState = LongPD;
         break;
       case LongPD:
         DPRINTF(PageTableWalker, "Got long mode PD entry %#016x.\n", pte);
-        doWrite = !pte.a;
-        pte.a = 1;
         entry.writable = entry.writable && pte.w;
         entry.user = entry.user && pte.u;
         if (badNX || !pte.p) {
@@ -344,6 +343,8 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
             fault = pageFault(pte.p);
             break;
         }
+        doWrite = !pte.a;
+        pte.a = 1;
         if (!pte.ps) {
             // 4 KB page
             entry.logBytes = 12;
@@ -364,20 +365,19 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
         }
       case LongPTE:
         DPRINTF(PageTableWalker, "Got long mode PTE entry %#016x.\n", pte);
-        doWrite = !pte.a;
-        pte.a = 1;
         entry.writable = entry.writable && pte.w;
         entry.user = entry.user && pte.u;
         if (badNX || !pte.p) {
             doEndWalk = true;
             constexpr uint64_t UPF_BIT = (1ULL << 58);
             if (!pte.p && !badNX && ((uint64_t)pte & UPF_BIT))
-                fault = std::make_shared<X86ISA::UserPageFault>(
-                            entry.vaddr, 0);
+                fault = std::make_shared<X86ISA::UserPageFault>(entry.vaddr, 0);
             else
                 fault = pageFault(pte.p);
             break;
         }
+        doWrite = !pte.a;
+        pte.a = 1;
         entry.paddr = mbits(pte, 51, 12);
         entry.uncacheable = uncacheable;
         entry.global = pte.g;

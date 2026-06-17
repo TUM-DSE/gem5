@@ -1538,12 +1538,7 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
             bool uintr_enabled = misc.uif;
             bool rflags_set = rflags.intf;
 
-            DPRINTF(Faults, "[commit] UffdPageFault: uif=%s IF=%s addr=0x%" PRIx64 "\n",
-                    uintr_enabled ? "true" : "false",
-                    rflags_set ? "true" : "false",
-                    fault_addr);
             if (!uintr_enabled || !rflags_set) {
-                DPRINTF(Faults, "[commit] downgrading UserPageFault to PageFault\n");
                 temp_fault = std::make_shared<X86ISA::PageFault>(fault_addr, (uint32_t)errorCode);
             }
         }

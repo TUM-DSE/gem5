@@ -504,7 +504,6 @@ UserPci::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 void
 UserPageFaultForward::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
-    DPRINTF(Faults, "[faults] Entered UserPageFaultForward::invoke\n");
     if (!FullSystem) {
         FaultBase::invoke(tc, inst);
         return;
@@ -534,18 +533,18 @@ UserPageFaultForward::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     pc.nupc(romMicroPC(entry) + 1);
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
-    tc->pcState(pc);
 
     if (m5reg.mode == LongMode)
             tc->setMiscReg(misc_reg::Cr2, addr);
         else
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
+
+    tc->pcState(pc);
 }
 
 void
 UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 {
-    DPRINTF(Faults, "[faults] Entered UserPageFault::invoke\n");
     if (!FullSystem) {
         FaultBase::invoke(tc, inst);
         return;
@@ -572,14 +571,14 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     pc.nupc(romMicroPC(entry) + 1);
     //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
     //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
-    tc->pcState(pc);
-    DPRINTF(Faults, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
-
 
     if (m5reg.mode == LongMode)
             tc->setMiscReg(misc_reg::Cr2, addr);
         else
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
+
+    tc->pcState(pc);
+    DPRINTF(Faults, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
 }
 } // namespace X86ISA
 } // namespace gem5

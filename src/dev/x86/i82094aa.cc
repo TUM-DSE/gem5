@@ -61,6 +61,7 @@ X86ISA::I82094AA::I82094AA(const Params &p)
     for (int i = 0; i < TableSize; i++) {
         redirTable[i] = entry;
         pinStates[i] = false;
+        pendingMask[i] = false;
     }
 
     for (int i = 0; i < p.port_inputs_connection_count; i++)
@@ -144,8 +145,18 @@ X86ISA::I82094AA::writeReg(uint8_t offset, uint32_t value)
             redirTable[index].topDW = value;
             redirTable[index].topReserved = 0;
         } else {
+            bool wasMasked = redirTable[index].mask;
             redirTable[index].bottomDW = value;
             redirTable[index].bottomReserved = 0;
+            // A real level-triggered IOAPIC re-notices a still-asserted
+            // line once unmasked. Our model delivers interrupts as
+            // one-shot messages, so redeliver anything that arrived and
+            // was dropped while this entry was masked.
+            if (wasMasked && !redirTable[index].mask &&
+                    pendingMask[index]) {
+                pendingMask[index] = false;
+                requestInterrupt(index);
+            }
         }
     } else {
         warn("Access to undefined I/O APIC register %#x.\n", offset);
@@ -199,7 +210,9 @@ X86ISA::I82094AA::requestInterrupt(int line)
     assert(line < TableSize);
     RedirTableEntry entry = redirTable[line];
     if (entry.mask) {
-        DPRINTF(I82094AA, "Entry was masked.\n");
+        DPRINTF(I82094AA, "Entry was masked, latching for redelivery "
+                "on unmask.\n");
+        pendingMask[line] = true;
         return;
     }
 
@@ -314,6 +327,7 @@ X86ISA::I82094AA::serialize(CheckpointOut &cp) const
     SERIALIZE_SCALAR(lowestPriorityOffset);
     SERIALIZE_ARRAY(redirTableArray, TableSize);
     SERIALIZE_ARRAY(pinStates, TableSize);
+    SERIALIZE_ARRAY(pendingMask, TableSize);
 }
 
 void
@@ -327,6 +341,7 @@ X86ISA::I82094AA::unserialize(CheckpointIn &cp)
     UNSERIALIZE_SCALAR(lowestPriorityOffset);
     UNSERIALIZE_ARRAY(redirTableArray, TableSize);
     UNSERIALIZE_ARRAY(pinStates, TableSize);
+    UNSERIALIZE_ARRAY(pendingMask, TableSize);
     for (int i = 0; i < TableSize; i++) {
         redirTable[i] = (RedirTableEntry)redirTableArray[i];
     }
