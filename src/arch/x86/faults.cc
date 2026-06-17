@@ -518,7 +518,7 @@ UserPageFaultForward::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     PCState pc = tc->pcState().as<PCState>();
     assert(pc == reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->pcState(tc->threadId()));
 
-    DPRINTF(Faults, "RIP %#x: User page fault forward %d: %s\n", pc.pc(), vector, describe());
+    DPRINTF(UserInterrupt, "RIP %#x: User page fault forward %d: %s\n", pc.pc(), vector, describe());
 
     using namespace X86ISAInst::rom_labels;
     X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
@@ -566,7 +566,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     tc->setReg(intRegMicro(7), pc.pc() - cs_base);
     tc->setReg(intRegMicro(15), errorCode);
 
-    DPRINTF(Faults, "[faults] About to set the UserPageFault microcode routine\n");
+    DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
     //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
@@ -578,7 +578,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
     tc->pcState(pc);
-    DPRINTF(Faults, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
+    DPRINTF(UserInterrupt, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
 }
 } // namespace X86ISA
 } // namespace gem5
