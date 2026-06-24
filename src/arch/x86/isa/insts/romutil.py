@@ -496,12 +496,12 @@ def rom
     subi rsp, rsp, 8, dataSize=8
     #MEM[SS:RSP]:=RIP
     st t7, ss, [1, t0, rsp], dataSize=8, addressSize=8
-    #RSP:=RSP-8; align by 16 byte again
-    subi rsp, rsp, 8, dataSize=8
 
-    # Force UintrPciON=0 so uiret always takes the pci ctrl-register path,
-    # independent of any UintrPciON=1 state set by virtio device interrupts.
-    wrval ctrlRegIdx("misc_reg::UintrPciON"), t0, dataSize=8
+    # Force UintrPciON=1 so uiret always takes the notpci (stack-pop) path.
+    # This makes uiret read {RIP/trampoline, RFLAGS, RSP} from [RSP+0..+16],
+    # matching the uintr_frame_extended layout (no alignment pad needed).
+    limm t2, 1, dataSize=8
+    wrval ctrlRegIdx("misc_reg::UintrPciON"), t2, dataSize=8
 
     #RIP:=UIHANDLER
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8
