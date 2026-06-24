@@ -573,6 +573,13 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     tc->setReg(intRegMicro(8), pc.pc() - cs_base);
     tc->setReg(intRegMicro(9), addr);
 
+    RegVal t8_rb = tc->getReg(intRegMicro(8));
+    RegVal t9_rb = tc->getReg(intRegMicro(9));
+    RegVal committed_rsp = tc->getReg(intRegClass[_RspIdx]);
+    RegVal handler_addr = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
+    warn("[UPF] addr=%#x pc=%#x t8_set=%#x t8_read=%#x t9_read=%#x committed_RSP=%#x UintrHandler=%#x\n",
+         addr, pc.pc(), pc.pc() - cs_base, t8_rb, t9_rb, committed_rsp, handler_addr);
+
     DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
@@ -582,11 +589,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
         else
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
-    warn("[UPF] addr=%#x pc=%#x cs_base=%#x t8(faultPC)=%#x t9(faultAddr)=%#x\n",
-         addr, pc.pc(), cs_base, pc.pc() - cs_base, addr);
-
     tc->pcState(pc);
-    DPRINTF(UserInterrupt, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
 }
 } // namespace X86ISA
 } // namespace gem5
