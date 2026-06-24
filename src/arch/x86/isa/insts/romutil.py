@@ -492,10 +492,9 @@ def rom
     st t10, ss, [1, t0, rsp], dataSize=8, addressSize=8
     #RSP:=RSP-8
 
-    # Read fault PC from UintrScratch (set by faults.cc, not corrupted by VirtIO delivery)
+    # t8 = fault PC set by faults.cc via intRegMicro(8); VirtIO only writes t1/t7
     subi rsp, rsp, 8, dataSize=8
-    rdval t7, ctrlRegIdx("misc_reg::UintrScratch"),dataSize=8
-    st t7, ss, [1, t0, rsp], dataSize=8, addressSize=8
+    st t8, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
     # UintrPciON stays 0 → UIRET takes notpci (stack-pop) path, reading {RIP,RFLAGS,RSP}
     # from [RSP+0..+16].  Handler overwrites [RSP+0] with ricochet_fault_trampoline

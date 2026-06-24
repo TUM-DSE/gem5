@@ -565,10 +565,13 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
     tc->setReg(intRegMicro(15), errorCode);
 
-    // t9 = fault address (direct, avoids CR2 speculative-read aliasing in microcode)
+    // t8 = fault PC, t9 = fault address.
+    // Use integer micro registers (not misc regs) so the O3 rename/bypass path
+    // sees the committed value — misc-reg rdval in microcode reads speculatively
+    // and gets stale pre-fault values (same aliasing as CR2).
+    // t8 and t9 are not written by VirtIO processPendingEvent (only t1 and t7 are).
+    tc->setReg(intRegMicro(8), pc.pc() - cs_base);
     tc->setReg(intRegMicro(9), addr);
-    // UintrScratch = fault PC (VirtIO interrupt delivery won't overwrite this)
-    tc->setMiscReg(misc_reg::UintrScratch, pc.pc() - cs_base);
 
     DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
     pc.upc(romMicroPC(entry));
@@ -579,11 +582,8 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
         else
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
-    {
-        RegVal scratch = tc->readMiscRegNoEffect(misc_reg::UintrScratch);
-        warn("[UPF] addr=%#x pc=%#x cs_base=%#x UintrScratch=%#x t9=%#x\n",
-             addr, pc.pc(), cs_base, scratch, addr);
-    }
+    warn("[UPF] addr=%#x pc=%#x cs_base=%#x t8(faultPC)=%#x t9(faultAddr)=%#x\n",
+         addr, pc.pc(), cs_base, pc.pc() - cs_base, addr);
 
     tc->pcState(pc);
     DPRINTF(UserInterrupt, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
