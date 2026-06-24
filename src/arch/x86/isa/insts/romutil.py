@@ -499,6 +499,10 @@ def rom
     #RSP:=RSP-8; align by 16 byte again
     subi rsp, rsp, 8, dataSize=8
 
+    # Force UintrPciON=0 so uiret always takes the pci ctrl-register path,
+    # independent of any UintrPciON=1 state set by virtio device interrupts.
+    wrval ctrlRegIdx("misc_reg::UintrPciON"), t0, dataSize=8
+
     #RIP:=UIHANDLER
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8
     wripi t1, 0, dataSize=8
