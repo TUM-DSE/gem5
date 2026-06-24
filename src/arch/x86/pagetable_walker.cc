@@ -370,10 +370,15 @@ Walker::WalkerState::stepWalk(PacketPtr &write)
         if (badNX || !pte.p) {
             doEndWalk = true;
             constexpr uint64_t UPF_BIT = (1ULL << 58);
-            if (!pte.p && !badNX && ((uint64_t)pte & UPF_BIT))
+            if (!pte.p && !badNX && ((uint64_t)pte & UPF_BIT)) {
+                DPRINTF(Faults, "[ptw] UserPageFault: vaddr=0x%lx pte=0x%lx\n",
+                        entry.vaddr, (uint64_t)pte);
                 fault = std::make_shared<X86ISA::UserPageFault>(entry.vaddr, 0);
-            else
+            } else {
+                DPRINTF(Faults, "[ptw] PageFault: vaddr=0x%lx pte=0x%lx upf_bit=%d\n",
+                        entry.vaddr, (uint64_t)pte, !!((uint64_t)pte & UPF_BIT));
                 fault = pageFault(pte.p);
+            }
             break;
         }
         doWrite = !pte.a;

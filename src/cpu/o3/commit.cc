@@ -1538,9 +1538,17 @@ Commit::commitHead(const DynInstPtr &head_inst, unsigned inst_num)
             bool uintr_enabled = misc.uif;
             bool rflags_set = rflags.intf;
 
+            DPRINTF(Faults, "[commit] UserPageFault at 0x%lx: uif=%d intf=%d\n",
+                    fault_addr, uintr_enabled, rflags_set);
             if (!uintr_enabled || !rflags_set) {
+                DPRINTF(Faults, "[commit] demoting UserPageFault->PageFault (uif=%d intf=%d)\n",
+                        uintr_enabled, rflags_set);
                 temp_fault = std::make_shared<X86ISA::PageFault>(fault_addr, (uint32_t)errorCode);
             }
+        } else {
+            auto pf = std::dynamic_pointer_cast<X86ISA::PageFault>(inst_fault);
+            if (pf)
+                DPRINTF(Faults, "[commit] plain PageFault (no UPF_BIT) at 0x%lx\n", pf->getAddr());
         }
         cpu->trap(temp_fault, tid,
                   head_inst->notAnInst() ? nullStaticInstPtr :
