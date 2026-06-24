@@ -575,7 +575,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 
     RegVal t8_rb = tc->getReg(intRegMicro(8));
     RegVal t9_rb = tc->getReg(intRegMicro(9));
-    RegVal committed_rsp = tc->getReg(intRegClass[_RspIdx]);
+    RegVal committed_rsp = tc->getReg(int_reg::Rsp);
     RegVal handler_addr = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
     warn("[UPF] addr=%#x pc=%#x t8_set=%#x t8_read=%#x t9_read=%#x committed_RSP=%#x UintrHandler=%#x\n",
          addr, pc.pc(), pc.pc() - cs_base, t8_rb, t9_rb, committed_rsp, handler_addr);
