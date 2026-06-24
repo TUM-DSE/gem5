@@ -565,20 +565,18 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
     tc->setReg(intRegMicro(15), errorCode);
 
-    // t8 = fault PC, t9 = fault address.
-    // Use integer micro registers (not misc regs) so the O3 rename/bypass path
-    // sees the committed value — misc-reg rdval in microcode reads speculatively
-    // and gets stale pre-fault values (same aliasing as CR2).
-    // t8 and t9 are not written by VirtIO processPendingEvent (only t1 and t7 are).
-    tc->setReg(intRegMicro(8), pc.pc() - cs_base);
-    tc->setReg(intRegMicro(9), addr);
-
-    RegVal t8_rb = tc->getReg(intRegMicro(8));
-    RegVal t9_rb = tc->getReg(intRegMicro(9));
+    // Store fault PC and committed RSP in misc registers so the UPF microcode
+    // can read them via rdval, bypassing the O3 rename map entirely.
+    // intRegMicro setReg writes the committed physical register, but after
+    // squashFromTrap the microcode may read a different physical register.
+    // Misc registers are not renamed, so rdval always reads the correct value.
     RegVal committed_rsp = tc->getReg(int_reg::Rsp);
+    tc->setMiscReg(misc_reg::UintrScratch, pc.pc() - cs_base);  // fault PC
+    tc->setMiscReg(misc_reg::UintrPciRSP, committed_rsp);        // committed RSP
+
     RegVal handler_addr = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
-    warn("[UPF] addr=%#x pc=%#x t8_set=%#x t8_read=%#x t9_read=%#x committed_RSP=%#x UintrHandler=%#x\n",
-         addr, pc.pc(), pc.pc() - cs_base, t8_rb, t9_rb, committed_rsp, handler_addr);
+    warn("[UPF] addr=%#x pc=%#x fault_pc_misc=%#x committed_RSP=%#x UintrHandler=%#x\n",
+         addr, pc.pc(), pc.pc() - cs_base, committed_rsp, handler_addr);
 
     DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
     pc.upc(romMicroPC(entry));
