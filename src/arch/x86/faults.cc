@@ -563,14 +563,16 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     
     tc->setReg(intRegMicro(1), vector);
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
-    tc->setReg(intRegMicro(7), pc.pc() - cs_base);
     tc->setReg(intRegMicro(15), errorCode);
+
+    // t9 = fault address (direct, avoids CR2 speculative-read aliasing in microcode)
+    tc->setReg(intRegMicro(9), addr);
+    // UintrScratch = fault PC (VirtIO interrupt delivery won't overwrite this)
+    tc->setMiscReg(misc_reg::UintrScratch, pc.pc() - cs_base);
 
     DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
     pc.upc(romMicroPC(entry));
     pc.nupc(romMicroPC(entry) + 1);
-    //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
-    //reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
 
     if (m5reg.mode == LongMode)
             tc->setMiscReg(misc_reg::Cr2, addr);
@@ -578,10 +580,9 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
     {
-        Addr cr2_check = tc->readMiscRegNoEffect(misc_reg::Cr2);
-        RegVal pciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
-        warn("[UPF] addr=%#x pc=%#x cs_base=%#x t7=%#x CR2_after=%#x UintrPciON=%d\n",
-             addr, pc.pc(), cs_base, pc.pc() - cs_base, cr2_check, pciON);
+        RegVal scratch = tc->readMiscRegNoEffect(misc_reg::UintrScratch);
+        warn("[UPF] addr=%#x pc=%#x cs_base=%#x UintrScratch=%#x t9=%#x\n",
+             addr, pc.pc(), cs_base, scratch, addr);
     }
 
     tc->pcState(pc);

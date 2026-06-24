@@ -477,10 +477,8 @@ def rom
 
     subi rsp, rsp, 8, dataSize=8
     st t15, hs, [1, t0, rsp], dataSize=8, addressSize=8
+    # t9 = fault address, set directly by faults.cc (avoids CR2 speculative aliasing)
     subi rsp, rsp, 8, dataSize=8
-    rdval t9, ctrlRegIdx("misc_reg::Cr2"),dataSize=8
-    limm t2, ~(4096 - 1), dataSize=8
-    and t9, t9, t2, dataSize=8
     st t9, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
     #RSP:=RSP-8
@@ -490,18 +488,18 @@ def rom
     #RSP:=RSP-8
     subi rsp, rsp, 8, dataSize=8
     #MEM[SS:RSP]:=RFLAGS
+    rflags t10, dataSize=8
     st t10, ss, [1, t0, rsp], dataSize=8, addressSize=8
     #RSP:=RSP-8
-    
+
+    # Read fault PC from UintrScratch (set by faults.cc, not corrupted by VirtIO delivery)
     subi rsp, rsp, 8, dataSize=8
-    #MEM[SS:RSP]:=RIP
+    rdval t7, ctrlRegIdx("misc_reg::UintrScratch"),dataSize=8
     st t7, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
-    # Force UintrPciON=1 so uiret always takes the notpci (stack-pop) path.
-    # This makes uiret read {RIP/trampoline, RFLAGS, RSP} from [RSP+0..+16],
-    # matching the uintr_frame_extended layout (no alignment pad needed).
-    limm t2, 1, dataSize=8
-    wrval ctrlRegIdx("misc_reg::UintrPciON"), t2, dataSize=8
+    # UintrPciON stays 0 → UIRET takes notpci (stack-pop) path, reading {RIP,RFLAGS,RSP}
+    # from [RSP+0..+16].  Handler overwrites [RSP+0] with ricochet_fault_trampoline
+    # before returning, so UIRET jumps to the trampoline.
 
     #RIP:=UIHANDLER
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8
