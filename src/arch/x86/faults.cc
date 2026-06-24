@@ -577,6 +577,13 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
         else
             tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
+    {
+        Addr cr2_check = tc->readMiscRegNoEffect(misc_reg::Cr2);
+        RegVal pciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
+        warn("[UPF] addr=%#x pc=%#x cs_base=%#x t7=%#x CR2_after=%#x UintrPciON=%d\n",
+             addr, pc.pc(), cs_base, pc.pc() - cs_base, cr2_check, pciON);
+    }
+
     tc->pcState(pc);
     DPRINTF(UserInterrupt, "[faults] Set regs: vector (intRegMicro(1)) = %u, PC offset (intRegMicro(7)) = %#lx (PC %#lx - CS base %#lx), errorCode (intRegMicro(15)) = %#lx\n", vector, pc.pc() - cs_base, pc.pc(), cs_base, errorCode);
 }
