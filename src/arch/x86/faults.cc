@@ -57,6 +57,7 @@
 
 #include "debug/UserInterrupt.hh"
 #include "debug/TLB.hh"
+#include "mem/se_translating_port_proxy.hh"
 
 namespace gem5
 {
@@ -556,40 +557,49 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 
     DPRINTF(UserInterrupt, "RIP %#x: User page fault %d: %s\n", pc.pc(), vector, describe());
 
-    using namespace X86ISAInst::rom_labels;
-    X86ISA::HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
-    // we should always be in FullSystem, LongMode and have an errorCode != -1
-    MicroPC entry = extern_label_longModeUserPageFaultWithError;
-    
-    tc->setReg(intRegMicro(1), vector);
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
-    tc->setReg(intRegMicro(15), errorCode);
-
+    RegVal fault_pc      = pc.pc() - cs_base;
     RegVal committed_rsp = tc->getReg(int_reg::Rsp);
-    RegVal fault_pc = pc.pc() - cs_base;
-    // Use dedicated UPF-only misc regs so no other microcode (e.g. UINTR delivery)
-    // can overwrite these values between invoke() and the UPF microcode's rdval.
-    tc->setMiscReg(misc_reg::UintrUpfPC, fault_pc);
-    tc->setMiscReg(misc_reg::UintrUpfRSP, committed_rsp);
-    tc->setMiscReg(misc_reg::UintrUpfFaultAddr, addr);
+    RegVal rflags_val    = tc->readMiscRegNoEffect(misc_reg::Rflags);
+    RegVal handler_addr  = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
 
-    RegVal handler_addr = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
-    warn("[UPF] addr=%#x pc=%#x upf_pc=%#x upf_rsp=%#x upf_faultaddr=%#x UintrHandler=%#x\n",
-         addr, pc.pc(),
-         tc->readMiscReg(misc_reg::UintrUpfPC),
-         tc->readMiscReg(misc_reg::UintrUpfRSP),
-         tc->readMiscReg(misc_reg::UintrUpfFaultAddr),
-         handler_addr);
+    // Build the UPF extended frame directly on the user stack.
+    // Layout (matches struct uintr_frame_extended in ricochet_lib/api.hpp):
+    //   [frame_rsp +  0] = rip (fault PC; handler overwrites with trampoline)
+    //   [frame_rsp +  8] = rflags
+    //   [frame_rsp + 16] = rsp (committed user RSP)
+    //   [frame_rsp + 24] = fault_address
+    //   [frame_rsp + 32] = error_code
+    Addr frame_rsp = (committed_rsp & ~15ULL) - 40;
 
-    DPRINTF(UserInterrupt, "[faults] About to set the UserPageFault microcode routine\n");
-    pc.upc(romMicroPC(entry));
-    pc.nupc(romMicroPC(entry) + 1);
+    struct {
+        uint64_t rip, rflags, rsp, fault_address, error_code;
+    } frame;
+    frame.rip          = fault_pc;
+    frame.rflags       = rflags_val;
+    frame.rsp          = committed_rsp;
+    frame.fault_address = addr;
+    frame.error_code   = errorCode;
 
+    SETranslatingPortProxy proxy(tc);
+    proxy.writeBlob(frame_rsp, &frame, sizeof(frame));
+
+    warn("[UPF] addr=%#x fault_pc=%#x committed_rsp=%#x frame_rsp=%#x handler=%#x\n",
+         addr, fault_pc, committed_rsp, frame_rsp, handler_addr);
+
+    HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
     if (m5reg.mode == LongMode)
         tc->setMiscReg(misc_reg::Cr2, addr);
     else
         tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
+    tc->setReg(int_reg::Rsp, frame_rsp);
+
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
+    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+
+    // Jump directly to the handler — no ROM microcode needed.
+    pc.set(handler_addr);
     tc->pcState(pc);
 }
 } // namespace X86ISA
