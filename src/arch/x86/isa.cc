@@ -236,6 +236,11 @@ ISA::readMiscRegNoEffect(RegIndex idx) const
     // attempt to read them directly.
     assert(misc_reg::isValid(idx));
 
+    if (idx == misc_reg::UintrUpfRSP || idx == misc_reg::UintrUpfPC ||
+            idx == misc_reg::UintrUpfFaultAddr) {
+        warn("[ISA] readMiscRegNoEffect idx=%d val=%#x\n", idx, regVal[idx]);
+    }
+
     return regVal[idx];
 }
 
@@ -308,6 +313,11 @@ ISA::setMiscRegNoEffect(RegIndex idx, RegVal val)
     }
 
     regVal[idx] = val & mask(reg_width);
+    if (idx == misc_reg::UintrUpfRSP || idx == misc_reg::UintrUpfPC ||
+            idx == misc_reg::UintrUpfFaultAddr) {
+        warn("[ISA] setMiscRegNoEffect idx=%d val=%#x stored=%#x\n",
+             idx, val, regVal[idx]);
+    }
 }
 
 void
