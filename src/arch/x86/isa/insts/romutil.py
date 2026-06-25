@@ -469,9 +469,10 @@ def rom
     #already done so).
     # THIS IS NOT DONE HERE AND CURRENTLY NOT DONE ANYWHERE
 
-    # holdRSP and rsp from misc reg UintrPciRSP (set by faults.cc to committed RSP).
-    # This bypasses the O3 rename map, which may give stale values after squashFromTrap.
-    rdval t6, ctrlRegIdx("misc_reg::UintrPciRSP"), dataSize=8
+    # Read committed RSP from dedicated UPF-only misc reg (set by faults.cc).
+    # UintrUpfRSP/UintrUpfPC/UintrUpfFaultAddr are never written by UINTR delivery
+    # microcode, so they cannot be overwritten between invoke() and these rdvals.
+    rdval t6, ctrlRegIdx("misc_reg::UintrUpfRSP"), dataSize=8
     mov rsp, rsp, t6, dataSize=8
     limm t2, ~0xF, dataSize=8
     and rsp, rsp, t2, dataSize=8
@@ -479,9 +480,8 @@ def rom
     subi rsp, rsp, 8, dataSize=8
     st t15, hs, [1, t0, rsp], dataSize=8, addressSize=8
 
-    # fault addr from Cr2 (set by faults.cc), bypasses rename map
     subi rsp, rsp, 8, dataSize=8
-    rdval t9, ctrlRegIdx("misc_reg::Cr2"), dataSize=8
+    rdval t9, ctrlRegIdx("misc_reg::UintrUpfFaultAddr"), dataSize=8
     st t9, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
     subi rsp, rsp, 8, dataSize=8
@@ -491,9 +491,8 @@ def rom
     rflags t10, dataSize=8
     st t10, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
-    # fault PC from UintrScratch (set by faults.cc), bypasses rename map
     subi rsp, rsp, 8, dataSize=8
-    rdval t8, ctrlRegIdx("misc_reg::UintrScratch"), dataSize=8
+    rdval t8, ctrlRegIdx("misc_reg::UintrUpfPC"), dataSize=8
     st t8, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
     # UintrPciON stays 0 → UIRET takes notpci (stack-pop) path, reading {RIP,RFLAGS,RSP}

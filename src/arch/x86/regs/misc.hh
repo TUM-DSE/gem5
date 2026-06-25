@@ -279,6 +279,9 @@ enum : RegIndex
     UintrScratch,
     UintrPageFaultForwardAddr,
     UintrPageFaultErrorCode,
+    UintrUpfPC,
+    UintrUpfRSP,
+    UintrUpfFaultAddr,
     UintrEnd,
 
     /*MsrVal(0x985, misc_reg::UintrRR),
@@ -923,6 +926,15 @@ EndBitUnion(UintrPageFaultForwardAddr)
 
 BitUnion64(UintrPageFaultErrorCode)
 EndBitUnion(UintrPageFaultErrorCode)
+
+BitUnion64(UintrUpfPC)
+EndBitUnion(UintrUpfPC)
+
+BitUnion64(UintrUpfRSP)
+EndBitUnion(UintrUpfRSP)
+
+BitUnion64(UintrUpfFaultAddr)
+EndBitUnion(UintrUpfFaultAddr)
 
 BitUnion64(Star)
     Bitfield<31,0> targetEip;
