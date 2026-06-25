@@ -563,18 +563,23 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     RegVal rflags_val    = tc->readMiscRegNoEffect(misc_reg::Rflags);
     RegVal handler_addr  = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
 
-    // Build the UPF extended frame directly on the user stack.
-    // Layout (matches struct uintr_frame_extended in ricochet_lib/api.hpp):
-    //   [frame_rsp +  0] = rip (fault PC; handler overwrites with trampoline)
-    //   [frame_rsp +  8] = rflags
-    //   [frame_rsp + 16] = rsp (committed user RSP)
-    //   [frame_rsp + 24] = fault_address
-    //   [frame_rsp + 32] = error_code
-    Addr frame_rsp = (committed_rsp & ~15ULL) - 40;
+    // Build the UPF extended frame on the user stack.
+    // GCC's __attribute__((interrupt)) with (frame*, vector) parameters treats
+    // [RSP+0] as the vector/error-code and the interrupt frame starts at [RSP+8].
+    // Layout:
+    //   [frame_rsp +  0] = vector (14 = page-fault vector; consumed as 2nd param)
+    //   [frame_rsp +  8] = rip    (fault PC; frame->rip)
+    //   [frame_rsp + 16] = rflags (frame->rflags)
+    //   [frame_rsp + 24] = rsp    (committed user RSP; frame->rsp)
+    //   [frame_rsp + 32] = fault_address (frame->fault_address)
+    //   [frame_rsp + 40] = error_code    (frame->error_code)
+    // GCC epilogue adds 8 to RSP before UIRET, so UIRET pops [RSP+8..+24].
+    Addr frame_rsp = (committed_rsp & ~15ULL) - 48;
 
     struct {
-        uint64_t rip, rflags, rsp, fault_address, error_code;
+        uint64_t vector, rip, rflags, rsp, fault_address, error_code;
     } frame;
+    frame.vector       = 14; // UPF vector (page fault)
     frame.rip          = fault_pc;
     frame.rflags       = rflags_val;
     frame.rsp          = committed_rsp;
