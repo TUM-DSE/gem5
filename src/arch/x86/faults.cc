@@ -564,33 +564,21 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     RegVal handler_addr  = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
 
     // Build the UPF extended frame on the user stack.
-    // GCC's __attribute__((interrupt)) with (frame*, vector) parameters treats
-    // [RSP+0] as the vector/error-code and the interrupt frame starts at [RSP+8].
-    // Layout:
-    //   [frame_rsp +  0] = vector (14 = page-fault vector; consumed as 2nd param)
-    //   [frame_rsp +  8] = rip    (fault PC; frame->rip)
-    //   [frame_rsp + 16] = rflags (frame->rflags)
-    //   [frame_rsp + 24] = rsp    (committed user RSP; frame->rsp)
-    //   [frame_rsp + 32] = fault_address (frame->fault_address)
-    //   [frame_rsp + 40] = error_code    (frame->error_code)
-    // GCC epilogue adds 8 to RSP before UIRET, so UIRET pops [RSP+8..+24].
+    // [RSP+0]=vector (GCC interrupt attr 2nd param), [RSP+8..+40]=interrupt frame.
     Addr frame_rsp = (committed_rsp & ~15ULL) - 48;
 
     struct {
         uint64_t vector, rip, rflags, rsp, fault_address, error_code;
     } frame;
-    frame.vector       = 14; // UPF vector (page fault)
-    frame.rip          = fault_pc;
-    frame.rflags       = rflags_val;
-    frame.rsp          = committed_rsp;
+    frame.vector        = 14;
+    frame.rip           = fault_pc;
+    frame.rflags        = rflags_val;
+    frame.rsp           = committed_rsp;
     frame.fault_address = addr;
-    frame.error_code   = errorCode;
+    frame.error_code    = errorCode;
 
     SETranslatingPortProxy proxy(tc);
     proxy.writeBlob(frame_rsp, &frame, sizeof(frame));
-
-    warn("[UPF] addr=%#x fault_pc=%#x committed_rsp=%#x frame_rsp=%#x handler=%#x\n",
-         addr, fault_pc, committed_rsp, frame_rsp, handler_addr);
 
     HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
     if (m5reg.mode == LongMode)
