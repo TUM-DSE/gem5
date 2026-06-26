@@ -588,14 +588,6 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 
     tc->setReg(int_reg::Rsp, frame_rsp);
 
-    // Clear UintrPciON so UIRET takes the notpci (stack-pop) path when
-    // returning from the UPF handler.  If UintrPciON were left at 1 (set by
-    // processPendingEvent for accumulated batch interrupts), UIRET would take
-    // the pci path instead, read UintrPciPC = 0 (never initialized for UPF),
-    // and jump to address 0 — crashing the thread.
-    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(
-        misc_reg::UintrPciON, 0, tc->threadId());
-
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
     reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
 

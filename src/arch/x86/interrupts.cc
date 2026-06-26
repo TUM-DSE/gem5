@@ -1063,7 +1063,8 @@ X86ISA::Interrupts::processPendingEvent()
         UintrPciPending_t uintrPciPending = tc->readMiscRegNoEffect(misc_reg::UintrPciPending);
         UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
         int64_t totalPending = auxPending + uintrPciPending;
-        if (!uintrPciON && LoadGenerator::switched && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
+        UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+        if (!uintrPciON && uintrMisc.uif && LoadGenerator::switched && ((curTick() > userPciTimeStart + userPciTimeout && totalPending > 0) || totalPending >= userPciThreshold)) {
             uintrPciPending = totalPending;
             auxPending = 0;
             DPRINTF(UserInterrupt, "[interrupts] IRRVUSER set PCI");
@@ -1072,6 +1073,9 @@ X86ISA::Interrupts::processPendingEvent()
                 tc->getCpuPtr()->wakeup(0);
             reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciON, 1, tc->threadId());
             userPciTimeStart = curTick();
+        } else if (!uintrPciON && !uintrMisc.uif && totalPending > 0) {
+            // UIF=0 means we're inside an interrupt handler; retry after the handler returns.
+            schedule(pendingEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(100)));
         }
         reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->setMiscRegNoEffect(misc_reg::UintrPciPending, uintrPciPending, tc->threadId());
         schedule(unlockEvent, curTick() + tc->getCpuPtr()->cyclesToTicks(Cycles(2)));
