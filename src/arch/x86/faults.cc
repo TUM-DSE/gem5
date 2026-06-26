@@ -588,8 +588,26 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
 
     tc->setReg(int_reg::Rsp, frame_rsp);
 
-    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inDelivery = true;
-    reinterpret_cast<o3::CPU *>(tc->getCpuPtr())->inHandlerPre = true;
+    auto *cpu = reinterpret_cast<o3::CPU *>(tc->getCpuPtr());
+    int tid = tc->threadId();
+
+    // Clear UIF so processPendingEvent won't arm UintrPciON=1 during this handler.
+    // The notpci path of uiret restores UIF=1 on return.
+    UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
+    uintrMisc.uif = 0;
+    cpu->setMiscRegNoEffect(misc_reg::UintrMisc, uintrMisc, tid);
+
+    // If processPendingEvent already set UintrPciON=1 before this UPF fired,
+    // the ROM microcode never ran so UintrPciPC=0.  Clear UintrPciON so that
+    // uiret takes the notpci (stack-pop) path rather than jumping to address 0.
+    UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
+    if (uintrPciON) {
+        DPRINTF(UserInterrupt, "[upf] UintrPciON was set; clearing to prevent pci-path uiret\n");
+        cpu->setMiscRegNoEffect(misc_reg::UintrPciON, 0, tid);
+    }
+
+    cpu->inDelivery = true;
+    cpu->inHandlerPre = true;
 
     // Jump directly to the handler — no ROM microcode needed.
     pc.set(handler_addr);
