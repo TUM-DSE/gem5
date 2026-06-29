@@ -563,9 +563,10 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     RegVal rflags_val    = tc->readMiscRegNoEffect(misc_reg::Rflags);
     RegVal handler_addr  = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
 
-    // Build the UPF extended frame on the user stack.
+    // Build the UPF extended frame on the user stack below the AMD64 red zone.
     // [RSP+0]=vector (GCC interrupt attr 2nd param), [RSP+8..+40]=interrupt frame.
-    Addr frame_rsp = (committed_rsp & ~15ULL) - 48;
+    RegVal stackadjust = tc->readMiscRegNoEffect(misc_reg::UintrStackAdjust);
+    Addr frame_rsp = ((committed_rsp - stackadjust) & ~15ULL) - 48;
 
     struct {
         uint64_t vector, rip, rflags, rsp, fault_address, error_code;
