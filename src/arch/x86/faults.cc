@@ -568,6 +568,9 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     RegVal stackadjust = tc->readMiscRegNoEffect(misc_reg::UintrStackAdjust);
     Addr frame_rsp = ((committed_rsp - stackadjust) & ~15ULL) - 48;
 
+    DPRINTF(UserInterrupt, "[upf] committed_rsp=%#x stackadjust=%#x frame_rsp=%#x fault_pc=%#x handler=%#x\n",
+            committed_rsp, stackadjust, frame_rsp, fault_pc, handler_addr);
+
     struct {
         uint64_t vector, rip, rflags, rsp, fault_address, error_code;
     } frame;
