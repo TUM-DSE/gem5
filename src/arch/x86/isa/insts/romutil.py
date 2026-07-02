@@ -495,9 +495,16 @@ def rom
     rdval t8, ctrlRegIdx("misc_reg::UintrUpfPC"), dataSize=8
     st t8, ss, [1, t0, rsp], dataSize=8, addressSize=8
 
+    # Vector (t1, set by faults.cc) is pushed last: the interrupt-attribute
+    # handler ABI expects the vector at [RSP+0] and the {RIP,RFLAGS,RSP,
+    # fault_addr,error_code} frame at [RSP+8], mirroring UINTR delivery above.
+    # The compiler-generated epilogue discards the vector slot before UIRET.
+    subi rsp, rsp, 8, dataSize=8
+    st t1, ss, [1, t0, rsp], dataSize=8, addressSize=8
+
     # UintrPciON stays 0 → UIRET takes notpci (stack-pop) path, reading {RIP,RFLAGS,RSP}
-    # from [RSP+0..+16].  Handler overwrites [RSP+0] with ricochet_fault_trampoline
-    # before returning, so UIRET jumps to the trampoline.
+    # from [RSP+0..+16] after the vector slot is popped.  Handler overwrites the
+    # frame RIP with ricochet_fault_trampoline, so UIRET jumps to the trampoline.
 
     #RIP:=UIHANDLER
     rdval t1, ctrlRegIdx("misc_reg::UintrHandler"),dataSize=8

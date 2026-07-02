@@ -572,6 +572,7 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     tc->setMiscReg(misc_reg::UintrUpfRSP, committed_rsp);
     tc->setMiscReg(misc_reg::UintrUpfPC, fault_pc);
     tc->setMiscReg(misc_reg::UintrUpfFaultAddr, addr);
+    tc->setReg(intRegMicro(1), vector);
     tc->setReg(intRegMicro(15), errorCode);
 
     auto *cpu = reinterpret_cast<o3::CPU *>(tc->getCpuPtr());
