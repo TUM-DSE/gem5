@@ -57,7 +57,6 @@
 
 #include "debug/UserInterrupt.hh"
 #include "debug/TLB.hh"
-#include "mem/se_translating_port_proxy.hh"
 
 namespace gem5
 {
@@ -560,29 +559,6 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     Addr cs_base = tc->readMiscRegNoEffect(misc_reg::CsEffBase);
     RegVal fault_pc      = pc.pc() - cs_base;
     RegVal committed_rsp = tc->getReg(int_reg::Rsp);
-    RegVal rflags_val    = tc->readMiscRegNoEffect(misc_reg::Rflags);
-    RegVal handler_addr  = tc->readMiscRegNoEffect(misc_reg::UintrHandler);
-
-    // Build the UPF extended frame on the user stack below the AMD64 red zone.
-    // [RSP+0]=vector (GCC interrupt attr 2nd param), [RSP+8..+40]=interrupt frame.
-    RegVal stackadjust = tc->readMiscRegNoEffect(misc_reg::UintrStackAdjust);
-    Addr frame_rsp = ((committed_rsp - stackadjust) & ~15ULL) - 48;
-
-    DPRINTF(UserInterrupt, "[upf] committed_rsp=%#x stackadjust=%#x frame_rsp=%#x fault_pc=%#x handler=%#x\n",
-            committed_rsp, stackadjust, frame_rsp, fault_pc, handler_addr);
-
-    struct {
-        uint64_t vector, rip, rflags, rsp, fault_address, error_code;
-    } frame;
-    frame.vector        = 14;
-    frame.rip           = fault_pc;
-    frame.rflags        = rflags_val;
-    frame.rsp           = committed_rsp;
-    frame.fault_address = addr;
-    frame.error_code    = errorCode;
-
-    SETranslatingPortProxy proxy(tc);
-    proxy.writeBlob(frame_rsp, &frame, sizeof(frame));
 
     HandyM5Reg m5reg = tc->readMiscRegNoEffect(misc_reg::M5Reg);
     if (m5reg.mode == LongMode)
@@ -590,31 +566,33 @@ UserPageFault::invoke(ThreadContext *tc, const StaticInstPtr &inst)
     else
         tc->setMiscReg(misc_reg::Cr2, (uint32_t)addr);
 
-    tc->setReg(int_reg::Rsp, frame_rsp);
+    // Populate MSRs read by longModeUserPageFaultWithError microcode.
+    // Microcode writes the frame via normal guest stores, which demand-paging
+    // handles in FullSystem mode (avoids SETranslatingPortProxy null-crash).
+    tc->setMiscReg(misc_reg::UintrUpfRSP, committed_rsp);
+    tc->setMiscReg(misc_reg::UintrUpfPC, fault_pc);
+    tc->setMiscReg(misc_reg::UintrUpfFaultAddr, addr);
+    tc->setReg(intRegMicro(15), errorCode);
 
     auto *cpu = reinterpret_cast<o3::CPU *>(tc->getCpuPtr());
     int tid = tc->threadId();
 
-    // Clear UIF so processPendingEvent won't arm UintrPciON=1 during this handler.
-    // The notpci path of uiret restores UIF=1 on return.
     UintrMisc uintrMisc = tc->readMiscRegNoEffect(misc_reg::UintrMisc);
     uintrMisc.uif = 0;
     cpu->setMiscRegNoEffect(misc_reg::UintrMisc, uintrMisc, tid);
 
-    // If processPendingEvent already set UintrPciON=1 before this UPF fired,
-    // the ROM microcode never ran so UintrPciPC=0.  Clear UintrPciON so that
-    // uiret takes the notpci (stack-pop) path rather than jumping to address 0.
     UintrPciON uintrPciON = tc->readMiscRegNoEffect(misc_reg::UintrPciON);
     if (uintrPciON) {
-        DPRINTF(UserInterrupt, "[upf] UintrPciON was set; clearing to prevent pci-path uiret\n");
+        DPRINTF(UserInterrupt, "[upf] UintrPciON was set; clearing\n");
         cpu->setMiscRegNoEffect(misc_reg::UintrPciON, 0, tid);
     }
 
+    using namespace X86ISAInst::rom_labels;
+    MicroPC entry = extern_label_longModeUserPageFaultWithError;
+    pc.upc(romMicroPC(entry));
+    pc.nupc(romMicroPC(entry) + 1);
     cpu->inDelivery = true;
     cpu->inHandlerPre = true;
-
-    // Jump directly to the handler — no ROM microcode needed.
-    pc.set(handler_addr);
     tc->pcState(pc);
 }
 } // namespace X86ISA
